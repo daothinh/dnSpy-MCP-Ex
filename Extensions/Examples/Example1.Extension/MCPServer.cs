@@ -8,9 +8,16 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json;
 using dnSpy.Contracts.Documents.Tabs;
 using dnSpy.Contracts.Documents.TreeView;
+using dnSpy.Contracts.Debugger;
+using dnSpy.Contracts.Debugger.Attach;
+using dnSpy.Contracts.Debugger.Breakpoints.Code;
+using dnSpy.Contracts.Debugger.CallStack;
+using dnSpy.Contracts.Debugger.DotNet.Breakpoints.Code;
+using dnSpy.Contracts.Debugger.Evaluation;
+using dnSpy.Contracts.Debugger.DotNet.Metadata;
+using dnSpy.Contracts.Text;
 //https://modelcontextprotocol.io/docs/concepts/prompts
 //https://prasanthmj.github.io/ai/mcp-go/
 
@@ -21,7 +28,24 @@ namespace Example1.Extension {
 		public static SimpleMcpServer MySimpleMCPServer;
 		public static IDocumentTreeView MyTreeView;
 		public static dnSpy.Contracts.App.IAppWindow MyAppWindow;
-		public static IDocumentTabService MyDocumentTabService; 
+		public static IDocumentTabService MyDocumentTabService;
+		public static MySettings MySettings;
+		public static DbgManager MyDbgManager;
+		public static DebuggerSettings MyDebuggerSettings;
+		public static AttachableProcessesService MyAttachableProcessesService;
+		public static DbgCodeBreakpointsService MyDbgCodeBreakpointsService;
+		public static DbgCallStackService MyDbgCallStackService;
+		public static DbgDotNetBreakpointFactory MyDbgDotNetBreakpointFactory;
+		public static DbgLanguageService MyDbgLanguageService;
+		public static DbgModuleIdProvider MyDbgModuleIdProvider;
+		public static DbgMetadataService MyDbgMetadataService;
+
+		public static SimpleMcpServer EnsureServer(MySettings settings) {
+			if (settings is null)
+				throw new ArgumentNullException(nameof(settings));
+			MySettings = settings;
+			return MySimpleMCPServer ??= new SimpleMcpServer(typeof(MCPCommands), settings);
+		}
 	}
 	class SimpleMcpServer {
 			private readonly HttpListener _listener = new HttpListener();
@@ -29,22 +53,95 @@ namespace Example1.Extension {
 			private readonly Type _targetType;
 			public bool IsActivelyDebugging = false;
 			public bool OutputPlugingDebugInformation = true;
+			public string ListenHost { get; }
+			public int ListenPort { get; }
+			public bool IsRunning => _isRunning;
+			public string LastStatusMessage { get; private set; } = "MCP server has not been started yet.";
+			public string LastStartError { get; private set; }
+			public string SseEndpoint => "http://" + ListenHost + ":" + ListenPort + "/sse/";
+			public string MessageEndpoint => "http://" + ListenHost + ":" + ListenPort + "/message/";
+			public int CommandCount => _commands.Count;
+			public int SessionCount {
+				get {
+					lock (_sseSessions)
+						return _sseSessions.Count;
+				}
+			}
 
-			public SimpleMcpServer(Type commandSourceType) {
+			static CommandAttribute[] GetCommandAttributes(MethodInfo methodInfo) {
+				if (methodInfo == null)
+					return Array.Empty<CommandAttribute>();
+
+				return methodInfo
+					.GetCustomAttributes(typeof(CommandAttribute), inherit: false)
+					.OfType<CommandAttribute>()
+					.Where(attribute => attribute != null && !string.IsNullOrWhiteSpace(attribute.Name))
+					.ToArray();
+			}
+
+			static CommandAttribute FindCommandAttribute(MethodInfo methodInfo, string commandName) {
+				var attributes = GetCommandAttributes(methodInfo);
+				if (attributes.Length == 0)
+					return null;
+
+				if (string.IsNullOrWhiteSpace(commandName))
+					return attributes[0];
+
+				return attributes.FirstOrDefault(attribute => string.Equals(attribute.Name, commandName, StringComparison.OrdinalIgnoreCase));
+			}
+
+			static bool pDebug => Global.MySettings?.VerboseLogging ?? false;
+
+			static TextColor GetLogColor(string message) {
+				if (string.IsNullOrWhiteSpace(message))
+					return TextColor.Text;
+
+				if (message.IndexOf("error", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					message.IndexOf("failed", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					message.IndexOf("exception", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					message.IndexOf("invalid", StringComparison.OrdinalIgnoreCase) >= 0)
+					return TextColor.Error;
+
+				if (message.IndexOf("warning", StringComparison.OrdinalIgnoreCase) >= 0)
+					return TextColor.Yellow;
+
+				if (message.IndexOf("listening", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					message.IndexOf("started", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					message.IndexOf("stopped", StringComparison.OrdinalIgnoreCase) >= 0 ||
+					message.IndexOf("initialized", StringComparison.OrdinalIgnoreCase) >= 0)
+					return TextColor.DebugLogExtensionMessage;
+
+				return TextColor.Text;
+			}
+
+			static void Log(string message) {
+				McpOutputLog.WriteLine(message, GetLogColor(message));
+				Debug.WriteLine(message);
+			}
+
+			public SimpleMcpServer(Type commandSourceType, MySettings settings) {
 				//DisableServerHeader(); //Prob not needed
 				_targetType = commandSourceType;
-				string IPAddress = "+"; //127.0.0.1
-				string port = "3003"; //64163
-				Console.WriteLine("MCP server listening on " + IPAddress + ":" + port);
+				if (settings is null)
+					throw new ArgumentNullException(nameof(settings));
+				ListenHost = string.IsNullOrWhiteSpace(settings.ServerHost) ? "127.0.0.1" : settings.ServerHost.Trim();
+				ListenPort = settings.ServerPort <= 0 || settings.ServerPort > 65535 ? 3003 : settings.ServerPort;
+				OutputPlugingDebugInformation = settings.VerboseLogging;
+				LastStatusMessage = "MCP server configured for " + ListenHost + ":" + ListenPort;
+				Log(LastStatusMessage);
 
-				_listener.Prefixes.Add("http://" + IPAddress + ":" + port + "/sse/"); //Request come in without a trailing '/' but are still handled
-				_listener.Prefixes.Add("http://" + IPAddress + ":" + port + "/message/");
+				_listener.Prefixes.Add(SseEndpoint); //Request come in without a trailing '/' but are still handled
+				_listener.Prefixes.Add(MessageEndpoint);
 				// Reflect and register [Command] methods
 				if (commandSourceType != null) {
 					foreach (var method in commandSourceType.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)) {
-						var attr = method.GetCustomAttribute<CommandAttribute>();
-						if (attr != null)
+						foreach (var attr in GetCommandAttributes(method)) {
+							if (_commands.TryGetValue(attr.Name, out var existingMethod) && !ReferenceEquals(existingMethod, method)) {
+								throw new InvalidOperationException("Duplicate MCP command name detected: '" + attr.Name + "' is declared on both '" + existingMethod.Name + "' and '" + method.Name + "'.");
+							}
+
 							_commands[attr.Name] = method;
+						}
 					}
 				}
 				
@@ -83,21 +180,38 @@ namespace Example1.Extension {
 			private bool _isRunning = false;
 
 			public void Start() {
+				TryStart(out _);
+			}
+
+			public bool TryStart(out string message) {
 				//Thread.Sleep(5000); //Uncomment to give enough time to hook for attach process debugging
 				if (_isRunning) {
-					Console.WriteLine("MCP server is already running.");
-					return;
+					message = "MCP server is already running at " + SseEndpoint;
+					LastStatusMessage = message;
+					LastStartError = null;
+					Log(message);
+					return true;
 				}
 
 				try {
 					_listener.Start();
 					_listener.BeginGetContext(OnRequest, null);
 					_isRunning = true;
-					//Console.WriteLine("MCP server started. CurrentlyDebugging: " + Bridge.DbgIsDebugging() + " IsRunning: " + Bridge.DbgIsRunning());
+					message = "MCP server listening on " + SseEndpoint;
+					LastStatusMessage = message;
+					LastStartError = null;
+					Log(message);
+					//Log("MCP server started. CurrentlyDebugging: " + Bridge.DbgIsDebugging() + " IsRunning: " + Bridge.DbgIsRunning());
 				}
 				catch (Exception ex) {
-					Console.WriteLine("Failed to start MCP server: " + ex.Message);
+					_isRunning = false;
+					LastStartError = ex.ToString();
+					message = "Failed to start MCP server: " + ex.Message;
+					LastStatusMessage = message;
+					Log(message);
+					return false;
 				}
+				return true;
 			}
 
 
@@ -116,20 +230,33 @@ namespace Example1.Extension {
 
 
 			public void Stop() {
+				TryStop(out _);
+			}
+
+			public bool TryStop(out string message) {
 				if (!_isRunning) {
-					Console.WriteLine("MCP server is already stopped.");
+					message = "MCP server is already stopped.";
+					LastStatusMessage = message;
 					_isRunning = false;
-					return;
+					Log(message);
+					return true;
 				}
 
 				try {
 					_listener.Stop();
 					_isRunning = false;
-					Console.WriteLine("MCP server stopped.");
+					LastStartError = null;
+					message = "MCP server stopped.";
+					LastStatusMessage = message;
+					Log(message);
 				}
 				catch (Exception ex) {
-					Console.WriteLine("Failed to stop MCP server: " + ex.Message);
+					message = "Failed to stop MCP server: " + ex.Message;
+					LastStatusMessage = message;
+					Log(message);
+					return false;
 				}
+				return true;
 			}
 
 
@@ -144,14 +271,13 @@ namespace Example1.Extension {
 					var compact = string.Join(Environment.NewLine,
 					prettyJson.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries).Select(line => line.TrimEnd()));
 
-					Console.WriteLine(compact.Replace("{", "").Replace("}", "").Replace("\r", ""));
+					Log(compact.Replace("{", "").Replace("}", "").Replace("\r", ""));
 				}
 				catch (JsonException ex) {
-					Console.WriteLine("Invalid JSON: " + ex.Message);
+					Log("Invalid JSON: " + ex.Message);
 				}
 			}
 
-			static bool pDebug = false;
 			private static readonly Dictionary<string, StreamWriter> _sseSessions = new Dictionary<string, StreamWriter>();
 
 			private async void OnRequest(IAsyncResult ar) // Make async void for simplicity here, consider Task for robustness
@@ -161,11 +287,11 @@ namespace Example1.Extension {
 					ctx = _listener.EndGetContext(ar);
 				}
 				catch (ObjectDisposedException) {
-					Console.WriteLine("Listener was stopped.");
+					Log("Listener was stopped.");
 					return; // Listener was stopped, exit gracefully
 				}
 				catch (Exception ex) {
-					Console.WriteLine($"Error getting listener context: {ex.Message}");
+					Log($"Error getting listener context: {ex.Message}");
 					// Potentially try to restart listening or log fatal error
 					return; // Cannot process request
 				}
@@ -181,23 +307,22 @@ namespace Example1.Extension {
 					// Listener was stopped between EndGetContext and BeginGetContext, ignore.
 				}
 				catch (Exception ex) {
-					Console.WriteLine($"Error restarting listener loop: {ex.Message}");
+					Log($"Error restarting listener loop: {ex.Message}");
 					// Consider implications if listening cannot be restarted
 				}
 
 
 				if (pDebug) {
-					Console.WriteLine("=== Incoming Request ===");
-					Console.WriteLine($"Method: {ctx.Request.HttpMethod}");
-					Console.WriteLine($"URL: {ctx.Request.Url}");
-					Console.WriteLine($"Headers:");
+					Log("=== Incoming Request ===");
+					Log($"Method: {ctx.Request.HttpMethod}");
+					Log($"URL: {ctx.Request.Url}");
+					Log($"Headers:");
 					foreach (string key in ctx.Request.Headers) {
-						Console.WriteLine($"  {key}: {ctx.Request.Headers[key]}");
+						Log($"  {key}: {ctx.Request.Headers[key]}");
 					}
-					Console.WriteLine("=========================");
+					Log("=========================");
 				}
-				string requestBody = null; // Variable to store the body
-										   // ctx.Response.Headers["Server"] = "MyCustomServer/1.0"; // Example custom header
+				// ctx.Response.Headers["Server"] = "MyCustomServer/1.0"; // Example custom header
 
 				if (ctx.Request.HttpMethod == "POST") {
 					// --- Existing POST handler logic ... ---
@@ -211,7 +336,7 @@ namespace Example1.Extension {
 						}
 
 						if (!sessionIsValid) {
-							Console.WriteLine($"Bad request for /message: Invalid or missing sessionId '{sessionId}'");
+							Log($"Bad request for /message: Invalid or missing sessionId '{sessionId}'");
 							ctx.Response.StatusCode = 400; // Bad Request
 														   // Optionally write a response body
 							byte[] badReqBuffer = Encoding.UTF8.GetBytes("Invalid or missing sessionId.");
@@ -220,7 +345,7 @@ namespace Example1.Extension {
 							try {
 								ctx.Response.OutputStream.Write(badReqBuffer, 0, badReqBuffer.Length);
 							}
-							catch (Exception writeEx) { Console.WriteLine($"Error writing 400 response: {writeEx.Message}"); }
+							catch (Exception writeEx) { Log($"Error writing 400 response: {writeEx.Message}"); }
 							finally { ctx.Response.OutputStream.Close(); }
 							return;
 						}
@@ -235,7 +360,7 @@ namespace Example1.Extension {
 							}
 						}
 						else {
-							if (pDebug) { Console.WriteLine("No body."); }
+							if (pDebug) { Log("No body."); }
 							// Handle case with no body if necessary, maybe depends on method called?
 							// For now, assume methods require a body. If not, handle json being null later.
 						}
@@ -254,7 +379,7 @@ namespace Example1.Extension {
 							// The HttpListener keeps the connection open implicitly after headers/initial body are sent.
 						}
 						catch (Exception acceptEx) {
-							Console.WriteLine($"Error sending 202 Accepted: {acceptEx.Message}");
+							Log($"Error sending 202 Accepted: {acceptEx.Message}");
 							// Cannot continue processing if 202 failed. Maybe cleanup SSE?
 							CleanupSseSession(sessionId);
 							return; // Stop processing this request
@@ -289,13 +414,13 @@ namespace Example1.Extension {
     							if (!root.TryGetProperty("method", out JsonElement methodElement) || methodElement.ValueKind != JsonValueKind.String) {
     								// Send error via SSE if ID is known, otherwise just log
     								var errorMsg = "Invalid JSON RPC: Missing or invalid 'method'.";
-    								Console.WriteLine($"Error processing request for session {sessionId}: {errorMsg}");
+    								Log($"Error processing request for session {sessionId}: {errorMsg}");
     								if (rpcId != null) SendSseError(sessionId, rpcId, -32600, errorMsg); // Invalid Request
     								return; // Stop processing
     							}
     							method = methodElement.GetString();
 
-    							if (pDebug) { Console.WriteLine($"RPC Call | Session: {sessionId}, ID: {rpcId}, Method: {method}"); }
+    							if (pDebug) { Log($"RPC Call | Session: {sessionId}, ID: {rpcId}, Method: {method}"); }
 
     							// --- Method Dispatching ---
     							if (method == "rpc.discover") // Legacy? Or just basic tool list? Treat like tools/list.
@@ -306,7 +431,7 @@ namespace Example1.Extension {
     								HandleInitialize(sessionId, rpcId, root); // Use helper
     							}
     							else if (method == "notifications/initialized") {
-    								if (pDebug) { Console.WriteLine($"Notification 'initialized' received for session {sessionId}."); }
+    								if (pDebug) { Log($"Notification 'initialized' received for session {sessionId}."); }
     								// No response needed for notifications
     							}
     							else if (method == "tools/list") {
@@ -329,31 +454,31 @@ namespace Example1.Extension {
     							else if (_commands.TryGetValue(method, out var methodInfo)) // Check for legacy direct command call
     							{
     								// Handle legacy direct calls if needed, otherwise treat as unknown
-    								Console.WriteLine($"Warning: Received legacy-style direct command call '{method}' for session {sessionId}. Consider using 'tools/call'.");
+    								Log($"Warning: Received legacy-style direct command call '{method}' for session {sessionId}. Consider using 'tools/call'.");
     								// Send Method Not Found or handle if intended
     								SendSseError(sessionId, rpcId, -32601, $"Direct command calls are deprecated. Use 'tools/call' for method '{method}'.");
     							}
     							else {
-    								Console.WriteLine($"Unknown method '{method}' received for session {sessionId}");
+    								Log($"Unknown method '{method}' received for session {sessionId}");
     								SendSseError(sessionId, rpcId, -32601, $"Method not found: {method}"); // Method Not Found
     							}
                             }
 						}
 						catch (JsonException jsonEx) {
-							Console.WriteLine($"JSON Error processing request for session {sessionId}: {jsonEx.Message}");
+							Log($"JSON Error processing request for session {sessionId}: {jsonEx.Message}");
 							// Try to send Parse Error (-32700). ID might be null if parsing failed early.
 							SendSseError(sessionId, rpcId, -32700, $"Parse error: Invalid JSON received. ({jsonEx.Message})");
 						}
 						catch (Exception ex) // Catch other errors during dispatch/processing
 						{
-							Console.WriteLine($"Error processing method '{method ?? "unknown"}' for session {sessionId}: {ex}");
+							Log($"Error processing method '{method ?? "unknown"}' for session {sessionId}: {ex}");
 							// Send Internal Server Error (-32000 or -32603)
 							SendSseError(sessionId, rpcId, -32603, $"Internal error processing method '{method ?? "unknown"}': {ex.Message}");
 						}
 					}
 					else // Path doesn't start with /message
 					{
-						Console.WriteLine($"POST request to unknown path: {path}");
+						Log($"POST request to unknown path: {path}");
 						ctx.Response.StatusCode = 404; // Not Found
 						ctx.Response.OutputStream.Close();
 					}
@@ -396,13 +521,13 @@ namespace Example1.Extension {
 								}
 								else {
 									// Handle extremely rare collision if necessary
-									Console.WriteLine($"WARNING: Session ID collision detected for {sessionId}");
+									Log($"WARNING: Session ID collision detected for {sessionId}");
 									// Could regenerate ID or return an error
 								}
 							}
 
 							if (added) {
-								Console.WriteLine($"SSE session started: {sessionId}");
+								Log($"SSE session started: {sessionId}");
 								// Write required handshake format
 								// Ensure correct path based on how server is hosted/proxied if needed
 								string messagePath = $"/message?sessionId={sessionId}";
@@ -429,7 +554,7 @@ namespace Example1.Extension {
 							}
 						}
 						catch (Exception ex) {
-							Console.WriteLine($"Error establishing SSE session or sending handshake: {ex.Message}");
+							Log($"Error establishing SSE session or sending handshake: {ex.Message}");
 							// Attempt to set error status code ONLY if no headers have been sent
 							// (which we can't reliably check, so we just try)
 							try {
@@ -440,7 +565,7 @@ namespace Example1.Extension {
 								}
 							}
 							catch (Exception statusEx) {
-								Console.WriteLine($"Could not set error status code for SSE setup failure: {statusEx.Message}");
+								Log($"Could not set error status code for SSE setup failure: {statusEx.Message}");
 							}
 
 							// Ensure response is closed if an error occurs during setup
@@ -454,13 +579,13 @@ namespace Example1.Extension {
 					{
 						// This is a synchronous response, not SSE
 						// Consider if this endpoint is actually needed if using MCP over SSE
-						Console.WriteLine("Handling legacy GET /discover or /mcp/");
+						Log("Handling legacy GET /discover or /mcp/");
 						var toolList = new List<object>();
 						lock (_commands) // Lock if _commands could be modified elsewhere
 						{
 							foreach (var cmd in _commands) {
 								var methodInfo = cmd.Value;
-								var attribute = methodInfo.GetCustomAttribute<CommandAttribute>();
+								var attribute = FindCommandAttribute(methodInfo, cmd.Key);
 								if (attribute != null && (!attribute.DebugOnly /* || Debugger.IsAttached *//* || Add Bridge checks if needed */)) {
 									toolList.Add(new {
 										name = cmd.Key,
@@ -485,19 +610,19 @@ namespace Example1.Extension {
 						try {
 							await ctx.Response.OutputStream.WriteAsync(buffer, 0, buffer.Length);
 						}
-						catch (Exception writeEx) { Console.WriteLine($"Error writing discover response: {writeEx.Message}"); }
+						catch (Exception writeEx) { Log($"Error writing discover response: {writeEx.Message}"); }
 						finally { ctx.Response.OutputStream.Close(); } // Close sync response
 					}
 					else // Unknown GET path
 					{
-						Console.WriteLine($"GET request to unknown path: {path}");
+						Log($"GET request to unknown path: {path}");
 						ctx.Response.StatusCode = 404; // Not Found
 						ctx.Response.OutputStream.Close();
 					}
 				} // End GET Handling
 				else // Other HTTP methods (PUT, DELETE, etc.)
 				{
-					Console.WriteLine($"Unsupported HTTP method: {ctx.Request.HttpMethod}");
+					Log($"Unsupported HTTP method: {ctx.Request.HttpMethod}");
 					ctx.Response.StatusCode = 405; // Method Not Allowed
 					ctx.Response.AddHeader("Allow", "GET, POST");
 					ctx.Response.OutputStream.Close();
@@ -518,7 +643,7 @@ namespace Example1.Extension {
 						prompts = new { }, // Indicate prompt support
 						resources = new { } // Indicate resource support
 					},
-					serverInfo = new { name = "AgentSmithers-dnSpyExMcpServer", version = "1.0.0" }, // Your server details
+					serverInfo = new { name = "AgentSmithers-dnSpyExMcpServer", version = "1.1.0" }, // Your server details
 					instructions = "Welcome to the AgentSmithers dnSpyEx MCP Server!" // Optional instructions
 				};
 				SendSseResult(sessionId, id, result);
@@ -527,13 +652,12 @@ namespace Example1.Extension {
 			private void HandleToolsList(string sessionId, object id) {
 				var toolsList = new List<object>();
 				bool isDebuggerAttached = true;//Bridge.DbgIsDebugging();
-				bool isDbgRunning = true; //Bridge.DbgIsRunning();
 				// Lock if _commands could be modified concurrently
 				lock (_commands) {
 					foreach (var command in _commands) {
 						string commandName = command.Key;
 						MethodInfo methodInfo = command.Value;
-						var attribute = methodInfo.GetCustomAttribute<CommandAttribute>();
+						var attribute = FindCommandAttribute(methodInfo, commandName);
 						if (attribute != null && (!attribute.DebugOnly || (isDebuggerAttached && IsActivelyDebugging || true) )) {
 							var parameters = methodInfo.GetParameters();
 							var properties = new Dictionary<string, object>();
@@ -543,7 +667,7 @@ namespace Example1.Extension {
 								string paramName = param.Name;
 								string paramType = GetJsonSchemaType(param.ParameterType);
 								// --- CORRECTED: Use generic description as fallback ---
-								string paramDescription = $"Parameter '{paramName}' for {commandName}";
+								string paramDescription = GetParameterDescription(commandName, param);
 							// --- You could add specific descriptions here based on param.Name if desired ---
 							// Example: if (paramName == "address") { paramDescription = "Memory address..."; }
 
@@ -554,7 +678,7 @@ namespace Example1.Extension {
 							if (param.ParameterType.IsArray) // More direct check than relying on GetJsonSchemaType's string output alone
 							{
 								// Get the type of the elements IN the array
-								Type? elementType = param.ParameterType.GetElementType();
+								Type elementType = param.ParameterType.GetElementType();
 
 								if (elementType != null) {
 									// Get the JSON schema type string for the element type
@@ -659,7 +783,7 @@ namespace Example1.Extension {
                     }
                     // else arguments is default/Undefined
 
-					if (pDebug) { Console.WriteLine($"Tool Call: {toolName}"); }
+					if (pDebug) { Log($"Tool Call: {toolName}"); }
 
 
 					// --- Execute Tool ---
@@ -671,7 +795,7 @@ namespace Example1.Extension {
 					}
 
 					if (commandFound) {
-						var attribute = methodInfo.GetCustomAttribute<CommandAttribute>();
+						var attribute = FindCommandAttribute(methodInfo, toolName);
 						// Check permissions/filters again if necessary
 						if (attribute == null  || (attribute.DebugOnly && !IsActivelyDebugging /* && !Debugger.IsAttached  && !Bridge.DbgIsDebugging() */ )) {
 							throw new InvalidOperationException($"Command '{toolName}' is not available in this context, you must begin debugging an application first!");
@@ -732,13 +856,13 @@ namespace Example1.Extension {
 				{
 					resultText = $"Error executing tool '{toolName}': {(tie.InnerException?.Message ?? tie.Message)}";
 					isError = true;
-					Console.WriteLine($"Execution Error in {toolName}: {(tie.InnerException ?? tie)}");
+					Log($"Execution Error in {toolName}: {(tie.InnerException ?? tie)}");
 				}
 				catch (Exception ex) // Error during parsing, binding, or invocation setup
 				{
 					resultText = $"Error processing tool call for '{toolName ?? "unknown"}': {ex.Message}";
 					isError = true;
-					Console.WriteLine($"Error during tool call {toolName ?? "unknown"}: {ex}");
+					Log($"Error during tool call {toolName ?? "unknown"}: {ex}");
 				}
 
 				// --- Send Result ---
@@ -750,7 +874,7 @@ namespace Example1.Extension {
 
 			// --- *** PROMPTS/LIST Handler *** ---
 			private void HandlePromptsList(string sessionId, object id) {
-				if (pDebug) { Console.WriteLine($"Handling prompts/list for session {sessionId}"); }
+				if (pDebug) { Log($"Handling prompts/list for session {sessionId}"); }
 				var promptsList = new List<PromptInfo>(); // Use the defined class
 				try {
 					// No lock needed for reading readonly _prompts generally, but add if modification is possible
@@ -763,7 +887,7 @@ namespace Example1.Extension {
 					SendSseResult(sessionId, id, result);
 				}
 				catch (Exception ex) {
-					Console.WriteLine($"Error handling prompts/list for session {sessionId}: {ex}");
+					Log($"Error handling prompts/list for session {sessionId}: {ex}");
 					SendSseError(sessionId, id, -32603, $"Internal error handling prompts/list: {ex.Message}");
 				}
 			}
@@ -791,10 +915,9 @@ namespace Example1.Extension {
 						arguments = argsElement;
 					}
 
-					if (pDebug) { Console.WriteLine($"Handling prompts/get: {promptName}"); }
+					if (pDebug) { Log($"Handling prompts/get: {promptName}"); }
 
 					// --- Find Prompt ---
-					bool promptFound;
 					lock (_prompts) // Lock if _prompts could be modified
 					{
 						promptInfo = _prompts.FirstOrDefault(p => p.name.Equals(promptName, StringComparison.OrdinalIgnoreCase));
@@ -874,19 +997,19 @@ namespace Example1.Extension {
 				}
 				catch (ArgumentException argEx) // Catch specific argument errors (parsing, validation)
 				{
-					Console.WriteLine($"Argument Error handling prompts/get for '{promptName ?? "unknown"}' (Session: {sessionId}): {argEx.Message}");
+					Log($"Argument Error handling prompts/get for '{promptName ?? "unknown"}' (Session: {sessionId}): {argEx.Message}");
 					SendSseError(sessionId, id, -32602, $"Invalid parameters: {argEx.Message}"); // Invalid Params
 				}
 				catch (Exception ex) // Catch other processing errors
 				{
-					Console.WriteLine($"Error handling prompts/get for '{promptName ?? "unknown"}' (Session: {sessionId}): {ex}");
+					Log($"Error handling prompts/get for '{promptName ?? "unknown"}' (Session: {sessionId}): {ex}");
 					SendSseError(sessionId, id, -32603, $"Internal error processing prompt '{promptName ?? "unknown"}': {ex.Message}"); // Internal Error
 				}
 			}
 
 			// --- *** RESOURCES/LIST Handler *** ---
 			private void HandleResourcesList(string sessionId, object id) {
-				if (pDebug) { Console.WriteLine($"Handling resources/list for session {sessionId}"); }
+				if (pDebug) { Log($"Handling resources/list for session {sessionId}"); }
 				var resourcesList = new List<object>(); // Combined list
 
 				try {
@@ -913,7 +1036,7 @@ namespace Example1.Extension {
 					SendSseResult(sessionId, id, result);
 				}
 				catch (Exception ex) {
-					Console.WriteLine($"Error handling resources/list for session {sessionId}: {ex}");
+					Log($"Error handling resources/list for session {sessionId}: {ex}");
 					SendSseError(sessionId, id, -32603, $"Internal error handling resources/list: {ex.Message}");
 				}
 			}
@@ -989,6 +1112,44 @@ namespace Example1.Extension {
 					return "object";
 			}
 
+			private string GetParameterDescription(string commandName, ParameterInfo param) {
+				string paramName = param.Name ?? string.Empty;
+				switch (commandName) {
+				case "Dbg_Get_Locals":
+					switch (paramName) {
+					case "MaxChildrenPerNode": return "Maximum number of direct children expanded for each local or parameter.";
+					case "ShowCompilerGenerated": return "Set true to include compiler-generated locals and captured variables.";
+					case "ShowDecompilerGenerated": return "Set true to include decompiler-generated synthetic locals.";
+					case "ShowRawLocals": return "Set true to prefer raw metadata locals instead of lifted/captured views.";
+					}
+					break;
+
+				case "Dbg_Get_Autos":
+				case "Dbg_Get_Return_Values":
+					if (paramName == "MaxChildrenPerNode")
+						return "Maximum number of direct children expanded for each returned value node.";
+					break;
+
+				case "Dbg_Evaluate_Expression":
+					switch (paramName) {
+					case "Expression": return "Expression to evaluate in the currently selected paused debug frame.";
+					case "NoSideEffects": return "Prefer safe evaluation without function/property execution when true.";
+					case "MaxChildrenPerNode": return "Maximum number of direct children expanded on the evaluated result.";
+					}
+					break;
+
+				case "Dbg_Get_Value_Children":
+					switch (paramName) {
+					case "Expression": return "Expression whose direct child members should be expanded in the current frame.";
+					case "MaxChildren": return "Maximum number of direct children returned for the evaluated expression.";
+					case "NoSideEffects": return "Prefer safe child expansion without function/property execution when true.";
+					}
+					break;
+				}
+
+				return $"Parameter '{paramName}' for {commandName}";
+			}
+
 
 
 
@@ -1031,25 +1192,25 @@ namespace Example1.Extension {
 							// Write standard SSE format: data: json\n\n
 							writer.Write($"data: {jsonData}\n\n");
 							writer.Flush(); // Ensure data is sent immediately
-							if (pDebug) { Console.WriteLine($"SSE >>> Session {sessionId}: {jsonData}"); }
+							if (pDebug) { Log($"SSE >>> Session {sessionId}: {jsonData}"); }
 						}
 					}
 					else {
-						Console.WriteLine($"Error: SSE Session {sessionId} not found or writer is null when trying to send data.");
+						Log($"Error: SSE Session {sessionId} not found or writer is null when trying to send data.");
 						// Optionally remove the session if writer is null?
 					}
 				}
 				catch (ObjectDisposedException) {
-					Console.WriteLine($"SSE Session {sessionId} writer was disposed. Cleaning up.");
+					Log($"SSE Session {sessionId} writer was disposed. Cleaning up.");
 					CleanupSseSession(sessionId);
 				}
 				catch (IOException ioEx) // Catches broken pipe etc.
 				{
-					Console.WriteLine($"SSE Write Error for session {sessionId}: {ioEx.Message}. Cleaning up.");
+					Log($"SSE Write Error for session {sessionId}: {ioEx.Message}. Cleaning up.");
 					CleanupSseSession(sessionId);
 				}
 				catch (Exception ex) {
-					Console.WriteLine($"Unexpected error sending SSE data for session {sessionId}: {ex}");
+					Log($"Unexpected error sending SSE data for session {sessionId}: {ex}");
 					// Consider cleanup here too
 					CleanupSseSession(sessionId);
 				}
@@ -1062,11 +1223,11 @@ namespace Example1.Extension {
 							writer?.Dispose();
 						}
 						catch (Exception ex) {
-							Console.WriteLine($"Error disposing writer for session {sessionId}: {ex.Message}");
+							Log($"Error disposing writer for session {sessionId}: {ex.Message}");
 						}
 						finally {
 							_sseSessions.Remove(sessionId);
-							Console.WriteLine($"Removed SSE session {sessionId}.");
+							Log($"Removed SSE session {sessionId}.");
 						}
 					}
 				}

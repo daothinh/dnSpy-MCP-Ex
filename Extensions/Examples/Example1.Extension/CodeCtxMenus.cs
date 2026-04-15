@@ -26,42 +26,42 @@ namespace Example1.Extension {
 	// This gets loaded by dnSpy and is used to add the Ctrl+Alt+Q command
 	[ExportAutoLoaded]
 	sealed class CommandLoader : IAutoLoaded {
-		static readonly RoutedCommand Option1Command = new RoutedCommand("Option1Command", typeof(CommandLoader));
+		static readonly RoutedCommand ToggleVerboseLoggingCommand = new RoutedCommand("ToggleVerboseLoggingCommand", typeof(CommandLoader));
 
 		[ImportingConstructor]
 		CommandLoader(IWpfCommandService wpfCommandService, MySettings mySettings) {
 			var cmds = wpfCommandService.GetCommands(ControlConstants.GUID_DOCUMENTVIEWER_UICONTEXT);
 			// This command will be added to all text editors
-			cmds.Add(Option1Command,
-				(s, e) => mySettings.BoolOption1 = !mySettings.BoolOption1,
+			cmds.Add(ToggleVerboseLoggingCommand,
+				(s, e) => mySettings.VerboseLogging = !mySettings.VerboseLogging,
 				(s, e) => e.CanExecute = true,
 				ModifierKeys.Control | ModifierKeys.Alt, Key.Q);
 		}
 	}
 
-	[ExportMenuItem(Header = "Option 1", InputGestureText = "Ctrl+Alt+Q", Group = Constants.GROUP_TEXTEDITOR, Order = 0)]
+	[ExportMenuItem(Header = "Verbose Logging", InputGestureText = "Ctrl+Alt+Q", Group = Constants.GROUP_TEXTEDITOR, Order = 0)]
 	sealed class TextEditorCommand1 : MenuItemBase {
 		readonly MySettings mySettings;
 
 		[ImportingConstructor]
 		TextEditorCommand1(MySettings mySettings) => this.mySettings = mySettings;
 
-		public override bool IsChecked(IMenuItemContext context) => mySettings.BoolOption1;
-		public override void Execute(IMenuItemContext context) => mySettings.BoolOption1 = !mySettings.BoolOption1;
+		public override bool IsChecked(IMenuItemContext context) => mySettings.VerboseLogging;
+		public override void Execute(IMenuItemContext context) => mySettings.VerboseLogging = !mySettings.VerboseLogging;
 
 		// Only show this in the document viewer
 		public override bool IsVisible(IMenuItemContext context) => context.CreatorObject.Guid == new Guid(MenuConstants.GUIDOBJ_DOCUMENTVIEWERCONTROL_GUID);
 	}
 
-	[ExportMenuItem(Header = "Option 2", Group = Constants.GROUP_TEXTEDITOR, Order = 10)]
+	[ExportMenuItem(Header = "Startup Prompt", Group = Constants.GROUP_TEXTEDITOR, Order = 10)]
 	sealed class TextEditorCommand2 : MenuItemBase {
 		readonly MySettings mySettings;
 
 		[ImportingConstructor]
 		TextEditorCommand2(MySettings mySettings) => this.mySettings = mySettings;
 
-		public override bool IsChecked(IMenuItemContext context) => mySettings.BoolOption2;
-		public override void Execute(IMenuItemContext context) => mySettings.BoolOption2 = !mySettings.BoolOption2;
+		public override bool IsChecked(IMenuItemContext context) => mySettings.ShowStartupPrompt;
+		public override void Execute(IMenuItemContext context) => mySettings.ShowStartupPrompt = !mySettings.ShowStartupPrompt;
 
 		// Only show this in the document viewer
 		public override bool IsVisible(IMenuItemContext context) => context.CreatorObject.Guid == new Guid(MenuConstants.GUIDOBJ_DOCUMENTVIEWERCONTROL_GUID);
@@ -79,14 +79,14 @@ namespace Example1.Extension {
 			}
 		}
 
-		public override string? GetHeader(IMenuItemContext context) {
+		public override string GetHeader(IMenuItemContext context) {
 			var md = GetTokenObj(context);
 			if (md is null)
 				return "Copy token";
 			return $"Copy token {md.MDToken.Raw:X8}";
 		}
 
-		IMDTokenProvider? GetTokenObj(IMenuItemContext context) {
+		IMDTokenProvider GetTokenObj(IMenuItemContext context) {
 			// Only show this in the document viewer
 			if (context.CreatorObject.Guid != new Guid(MenuConstants.GUIDOBJ_DOCUMENTVIEWERCONTROL_GUID))
 				return null;
@@ -117,7 +117,7 @@ namespace Example1.Extension {
 			}
 		}
 
-		public override string? GetHeader(IMenuItemContext context) {
+		public override string GetHeader(IMenuItemContext context) {
 			var documentViewer = GetDocumentViewer(context);
 			if (documentViewer is null)
 				return "Copy line and column";
@@ -140,7 +140,7 @@ namespace Example1.Extension {
 			}
 		}
 
-		IDocumentViewer? GetDocumentViewer(IMenuItemContext context) {
+		IDocumentViewer GetDocumentViewer(IMenuItemContext context) {
 			// Only show this in the document viewer
 			if (context.CreatorObject.Guid != new Guid(MenuConstants.GUIDOBJ_DOCUMENTVIEWERCONTROL_GUID))
 				return null;

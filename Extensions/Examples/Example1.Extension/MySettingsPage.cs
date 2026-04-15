@@ -23,7 +23,6 @@ namespace Example1.Extension {
 	}
 
 	sealed class MyAppSettingsPage : AppSettingsPage {
-		//TODO: Use your own GUID
 		static readonly Guid THE_GUID = new Guid("AE905210-A789-4AE2-B83B-537515D9F435");
 
 		// Guid of parent page or Guid.Empty if it has none
@@ -35,7 +34,7 @@ namespace Example1.Extension {
 		// The order of the page, let's place it after the debugger page
 		public override double Order => AppSettingsConstants.ORDER_DEBUGGER + 0.1;
 
-		public override string Title => "MySettings";
+		public override string Title => "dnSpy MCP Server";
 
 		// An image that can be shown. You can return ImageReference.None if you don't want an image.
 		// Let's return an image since no other settings page is currently using images.
@@ -43,7 +42,7 @@ namespace Example1.Extension {
 
 		// This is the content shown in the page. It should be a WPF object (eg. a UserControl) or a
 		// ViewModel with a DataTemplate defined in a resource dictionary.
-		public override object? UIObject {
+		public override object UIObject {
 			get {
 				if (uiObject is null) {
 					uiObject = new MySettingsControl();
@@ -52,7 +51,7 @@ namespace Example1.Extension {
 				return uiObject;
 			}
 		}
-		MySettingsControl? uiObject;
+		MySettingsControl uiObject;
 
 		readonly MySettings globalSettings;
 		readonly MySettings newSettings;

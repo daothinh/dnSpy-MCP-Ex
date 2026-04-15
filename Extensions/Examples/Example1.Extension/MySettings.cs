@@ -4,83 +4,131 @@ using System.ComponentModel.Composition;
 using dnSpy.Contracts.MVVM;
 using dnSpy.Contracts.Settings;
 
-// Reads and writes the extension settings
-
 namespace Example1.Extension {
 	class MySettings : ViewModelBase {
-		public bool BoolOption1 {
-			get => boolOption1;
+		public string ServerHost {
+			get => serverHost;
 			set {
-				if (boolOption1 != value) {
-					boolOption1 = value;
-					OnPropertyChanged(nameof(BoolOption1));
+				var newValue = string.IsNullOrWhiteSpace(value) ? "127.0.0.1" : value.Trim();
+				if (serverHost != newValue) {
+					serverHost = newValue;
+					OnPropertyChanged(nameof(ServerHost));
 				}
 			}
 		}
-		bool boolOption1 = true;
+		string serverHost = "127.0.0.1";
 
-		public bool BoolOption2 {
-			get => boolOption2;
+		public int ServerPort {
+			get => serverPort;
 			set {
-				if (boolOption2 != value) {
-					boolOption2 = value;
-					OnPropertyChanged(nameof(BoolOption2));
+				var newValue = value <= 0 || value > 65535 ? 3003 : value;
+				if (serverPort != newValue) {
+					serverPort = newValue;
+					OnPropertyChanged(nameof(ServerPort));
 				}
 			}
 		}
-		bool boolOption2 = false;
+		int serverPort = 3003;
 
-		public string StringOption3 {
-			get => stringOption3;
+		public bool AutoStartServer {
+			get => autoStartServer;
 			set {
-				if (stringOption3 != value) {
-					stringOption3 = value;
-					OnPropertyChanged(nameof(StringOption3));
+				if (autoStartServer != value) {
+					autoStartServer = value;
+					OnPropertyChanged(nameof(AutoStartServer));
 				}
 			}
 		}
-		string stringOption3 = string.Empty;
+		bool autoStartServer = true;
+
+		public bool ShowStartupPrompt {
+			get => showStartupPrompt;
+			set {
+				if (showStartupPrompt != value) {
+					showStartupPrompt = value;
+					OnPropertyChanged(nameof(ShowStartupPrompt));
+				}
+			}
+		}
+		bool showStartupPrompt = true;
+
+		public bool VerboseLogging {
+			get => verboseLogging;
+			set {
+				if (verboseLogging != value) {
+					verboseLogging = value;
+					OnPropertyChanged(nameof(VerboseLogging));
+				}
+			}
+		}
+		bool verboseLogging;
+
+		public bool OpenAssemblyExplorerOnStartup {
+			get => openAssemblyExplorerOnStartup;
+			set {
+				if (openAssemblyExplorerOnStartup != value) {
+					openAssemblyExplorerOnStartup = value;
+					OnPropertyChanged(nameof(OpenAssemblyExplorerOnStartup));
+				}
+			}
+		}
+		bool openAssemblyExplorerOnStartup = true;
+
+		public bool OpenMcpLogOnStartup {
+			get => openMcpLogOnStartup;
+			set {
+				if (openMcpLogOnStartup != value) {
+					openMcpLogOnStartup = value;
+					OnPropertyChanged(nameof(OpenMcpLogOnStartup));
+				}
+			}
+		}
+		bool openMcpLogOnStartup = true;
 
 		public MySettings Clone() => CopyTo(new MySettings());
 
 		public MySettings CopyTo(MySettings other) {
-			other.BoolOption1 = BoolOption1;
-			other.BoolOption2 = BoolOption2;
-			other.StringOption3 = StringOption3;
+			other.ServerHost = ServerHost;
+			other.ServerPort = ServerPort;
+			other.AutoStartServer = AutoStartServer;
+			other.ShowStartupPrompt = ShowStartupPrompt;
+			other.VerboseLogging = VerboseLogging;
+			other.OpenAssemblyExplorerOnStartup = OpenAssemblyExplorerOnStartup;
+			other.OpenMcpLogOnStartup = OpenMcpLogOnStartup;
 			return other;
 		}
 	}
 
-
-	// Export this class so it can be imported by other classes in this extension
 	[Export(typeof(MySettings))]
 	sealed class MySettingsImpl : MySettings {
-		//TODO: Use your own guid
 		static readonly Guid SETTINGS_GUID = new Guid("A308405D-0DF5-4C56-8B1E-8CE7BA6365E1");
 
 		readonly ISettingsService settingsService;
 
-		// Tell MEF to pass in the required ISettingsService instance exported by dnSpy
 		[ImportingConstructor]
 		MySettingsImpl(ISettingsService settingsService) {
 			this.settingsService = settingsService;
 
-			// Read the settings from the file or use the default values if our settings haven't
-			// been saved to it yet.
-
 			var sect = settingsService.GetOrCreateSection(SETTINGS_GUID);
-			BoolOption1 = sect.Attribute<bool?>(nameof(BoolOption1)) ?? BoolOption1;
-			BoolOption2 = sect.Attribute<bool?>(nameof(BoolOption2)) ?? BoolOption2;
-			StringOption3 = sect.Attribute<string>(nameof(StringOption3)) ?? StringOption3;
+			ServerHost = sect.Attribute<string>(nameof(ServerHost)) ?? ServerHost;
+			ServerPort = sect.Attribute<int?>(nameof(ServerPort)) ?? ServerPort;
+			AutoStartServer = sect.Attribute<bool?>(nameof(AutoStartServer)) ?? AutoStartServer;
+			ShowStartupPrompt = sect.Attribute<bool?>(nameof(ShowStartupPrompt)) ?? ShowStartupPrompt;
+			VerboseLogging = sect.Attribute<bool?>(nameof(VerboseLogging)) ?? VerboseLogging;
+			OpenAssemblyExplorerOnStartup = sect.Attribute<bool?>(nameof(OpenAssemblyExplorerOnStartup)) ?? OpenAssemblyExplorerOnStartup;
+			OpenMcpLogOnStartup = sect.Attribute<bool?>(nameof(OpenMcpLogOnStartup)) ?? OpenMcpLogOnStartup;
 			PropertyChanged += MySettingsImpl_PropertyChanged;
 		}
 
-		void MySettingsImpl_PropertyChanged(object? sender, PropertyChangedEventArgs e) {
-			// Save the settings
+		void MySettingsImpl_PropertyChanged(object sender, PropertyChangedEventArgs e) {
 			var sect = settingsService.RecreateSection(SETTINGS_GUID);
-			sect.Attribute(nameof(BoolOption1), BoolOption1);
-			sect.Attribute(nameof(BoolOption2), BoolOption2);
-			sect.Attribute(nameof(StringOption3), StringOption3);
+			sect.Attribute(nameof(ServerHost), ServerHost);
+			sect.Attribute(nameof(ServerPort), ServerPort);
+			sect.Attribute(nameof(AutoStartServer), AutoStartServer);
+			sect.Attribute(nameof(ShowStartupPrompt), ShowStartupPrompt);
+			sect.Attribute(nameof(VerboseLogging), VerboseLogging);
+			sect.Attribute(nameof(OpenAssemblyExplorerOnStartup), OpenAssemblyExplorerOnStartup);
+			sect.Attribute(nameof(OpenMcpLogOnStartup), OpenMcpLogOnStartup);
 		}
 	}
 }

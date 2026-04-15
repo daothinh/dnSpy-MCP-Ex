@@ -20,139 +20,292 @@ using static Example1.Extension.SimpleMcpServer;
 
 namespace Example1.Extension
 {
-    class MCPCommands
+    partial class MCPCommands
     {
 		[Command("Help", MCPCmdDescription = "Call this command before executing any other dnSpyEx command for assistance on how to pass arguments.")]
 		public static string Help() {
-			return @"You are working with a MCPServer that provides Methods for inspecting and manipulating .NET assemblies inside dnSpy. 
-				Each Method returns a string containing the requested information. Your job is to invoke these Methods using correct argument names and types, 
-				capture their return values in string variables, and use the information as needed.
+			return BuildDynamicHelp();
+		}
 
-				dnSpy holds information in a hierarchy with multiple assemblys loaded.
-				Assembly
-				└── Namespace
-					├── ClassA
-					├── ClassB
-					└── ClassC
-						├── Method1()
-						├── Method2()
-						└── Method3()
+		static IEnumerable<ModuleDocumentNode> GetModuleNodes(string assemblyName = null) {
+			var nodes = Global.MyTreeView.GetAllModuleNodes().ToList();
+			if (string.IsNullOrWhiteSpace(assemblyName))
+				return nodes;
 
-				Explanation of the layout:
-				Assembly is the root.
-				Under the assembly, Namespace groups all related types.
-				Within the namespace, each Class is listed with a ├── (if not last) or └── (if last).
-				Methods inside a class are further indented under that class, also using ├──/└── to show their order.
+			return nodes.Where(node => {
+				var module = node.GetModule();
+				var asmName = module.Assembly?.Name ?? module.Name;
+				return string.Equals(asmName, assemblyName, StringComparison.OrdinalIgnoreCase);
+			});
+		}
 
-				Here are a listt of commands, their format and what they return:
-				Get_Loaded_Assemblies()
-					Takes no parameters and returns a newline-delimited list of all loaded assembly names.
-				Example of what the Get_Loaded_Assemblies returns:
-				dnlib
-				System.Runtime
-				System.Private.CoreLib
-				System.Web.Services
-				mscorlib
-				System
-				System.Xml
-				Microsoft.VisualBasic
-				System.Web
-				System.Data
-				System.Web.Extensions
-				AjaxControlToolkit
+		static TypeDef FindType(ModuleDef module, string @namespace, string className) =>
+			module.GetTypes().FirstOrDefault(type =>
+				string.Equals(type.Namespace ?? string.Empty, @namespace ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+				string.Equals(type.Name.String, className, StringComparison.OrdinalIgnoreCase));
 
-				Namespaces_From_Assembly(string assemblyName)
-					Takes one parameter named assemblyName, which should match the exact assembly name returned from Get_Loaded_Assemblies.
-					Example Method call: Namespaces_From_Assembly(""System.Runtime"");
-				Example of what the Namespaces_From_Assembly returns:
-				System
-				System.Runtime.Serialization
-				System.Runtime.Serialization.Configuration
-				System.Runtime.Serialization.Diagnostics
-				System.Runtime.Serialization.Diagnostics.Application
-				System.Runtime.Serialization.Json
-				System.Text
-				System.Xml
+		static int NormalizeMaxResults(int maxResults, int defaultValue, int hardLimit = 200) {
+			if (maxResults <= 0)
+				return defaultValue;
+			return Math.Min(maxResults, hardLimit);
+		}
 
-				Get_Global_Namespaces()
-					Takes no parameters.
-					Returns a newline-delimited list of all types in the global namespace (i.e., no explicit namespace).
+		static bool ContainsIgnoreCase(string source, string value) =>
+			!string.IsNullOrEmpty(source) &&
+			!string.IsNullOrEmpty(value) &&
+			source.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
 
-				Classes_From_Namespace(string assemblyName, string namespaceName)
-					Takes two parameters—the assembly name returned from Get_Loaded_Assemblies and a namespace returned from Namespaces_From_Assembly.
-					Example Method call: Classes_From_Namespace(""System.Runtime"", ""System.Runtime.Serialization.Json"");
+		static string SanitizeForSingleLine(string value, int maxLength = 120) {
+			if (string.IsNullOrEmpty(value))
+				return string.Empty;
 
-				GetCurrentlySelectItem()
-					Takes no parameters.
-					Returns a descriptive string for the currently selected node in the dnSpy tree view. Useful for context-aware operations.
-					Possible return formats: ""Assembly Document: [Name]"", ""Namespace: [Name]"", ""Class Type: [Name]"", ""MethodNode: [Name]"", etc., or an empty string if nothing is selected, or an error message.
-				Example Method call: GetCurrentlySelectItem()
-				Example Return: ""Class Type: String"" or ""MethodNode: Substring""
+			var sanitized = value.Replace("\r", "\\r").Replace("\n", "\\n");
+			return sanitized.Length <= maxLength ? sanitized : sanitized.Substring(0, maxLength) + "...";
+		}
 
-				Get_Method_Prototypes(string Assembly, string Namespace, string ClassName)
-					Takes three parameters—the name of the assembly, the namespace, and the class name—and returns a newline-delimited list of all Method prototypes in that class.
-					Example Method call: Get_Method_Prototypes(""MyAssemblyName"", ""MyNamespace"", ""MyClassName"");
+		[Command("Get_Server_Status", MCPCmdDescription = "Returns the current MCP server host, port, session count and startup settings.")]
+		public static string GetServerStatus() {
+			var sb = new StringBuilder();
+			var server = Global.MySimpleMCPServer;
+			var settings = Global.MySettings;
 
-				Get_Class_Sourcecode(string assemblyName, string namespaceName, string className)
-					Takes three parameters—the assembly name, the namespace, and the class name—and returns the full source code of that class.
+			if (server == null) {
+				sb.AppendLine("Running: False");
+				sb.AppendLine("Initialized: False");
+				if (settings != null) {
+					sb.AppendLine($"ConfiguredHost: {settings.ServerHost}");
+					sb.AppendLine($"ConfiguredPort: {settings.ServerPort}");
+					sb.AppendLine($"AutoStartServer: {settings.AutoStartServer}");
+					sb.AppendLine($"ShowStartupPrompt: {settings.ShowStartupPrompt}");
+					sb.AppendLine($"VerboseLogging: {settings.VerboseLogging}");
+					sb.AppendLine($"OpenAssemblyExplorerOnStartup: {settings.OpenAssemblyExplorerOnStartup}");
+				}
+				sb.Append("Status: MCP server instance has not been initialized yet.");
+				return sb.ToString();
+			}
 
-				Get_Method_SourceCode(string Assembly, string Namespace, string ClassName, string MethodName)
-					Takes four parameters—the assembly name, the namespace, the class name, and the Method name—and returns the full source code of the specified Method.
-					Example Method call: Get_Method_SourceCode(""MyAssemblyName"", ""MyNamespace"", ""MyClassName"", ""MyMethodName"");
+			sb.AppendLine($"Running: {server.IsRunning}");
+			sb.AppendLine("Initialized: True");
+			sb.AppendLine($"ListenHost: {server.ListenHost}");
+			sb.AppendLine($"ListenPort: {server.ListenPort}");
+			sb.AppendLine($"SseEndpoint: {server.SseEndpoint}");
+			sb.AppendLine($"MessageEndpoint: {server.MessageEndpoint}");
+			sb.AppendLine($"ActiveSessions: {server.SessionCount}");
+			sb.AppendLine($"RegisteredCommands: {server.CommandCount}");
+			sb.AppendLine($"Status: {server.LastStatusMessage}");
+			if (!string.IsNullOrWhiteSpace(server.LastStartError))
+				sb.AppendLine($"LastStartError: {SanitizeForSingleLine(server.LastStartError, 240)}");
+			if (settings != null) {
+				sb.AppendLine($"AutoStartServer: {settings.AutoStartServer}");
+				sb.AppendLine($"ShowStartupPrompt: {settings.ShowStartupPrompt}");
+				sb.AppendLine($"VerboseLogging: {settings.VerboseLogging}");
+				sb.AppendLine($"OpenAssemblyExplorerOnStartup: {settings.OpenAssemblyExplorerOnStartup}");
+			}
+			return sb.ToString();
+		}
 
-				Update_Method_SourceCode(string Assembly, string Namespace, string ClassName, string MethodName, string Source)
-					Takes five parameters: the assembly, namespace, class, and method names to target, plus a 'Source' string containing the C# code for the new method body.
-					Attempts to replace the target method's body with the provided source code. This involves internal decompilation and recompilation.
-					Returns a confirmation message indicating success or failure, or an error message.
-				Example Method call: Update_Method_SourceCode(""MyLib"", ""MyNamespace"", ""MyClass"", ""MyMethod"", ""Console.WriteLine(\""Hello!\""; return 1;"")
+		[Command("Search_Types", MCPCmdDescription = "Searches types in a loaded assembly by name or full name.")]
+		public static string SearchTypes(string Assembly, string SearchTerm, int MaxResults = 50) {
+			try {
+				if (string.IsNullOrWhiteSpace(SearchTerm))
+					return "SearchTerm cannot be empty.";
 
-				Get_Function_Opcodes(string assemblyName, string @namespace, string className, string methodName)
-					Takes four parameters: the assembly, namespace, class, and method names.
-					Returns the IL (Intermediate Language) opcodes of the specified method, formatted with line numbers, offsets, opcode names, and operands.
-				Example Method call: Get_Function_Opcodes(""System.Runtime"", ""System"", ""String"", ""IsNullOrEmpty"")
-				Example Return (excerpt):
-				// IL for System.Runtime:System.String.IsNullOrEmpty
-				// #    Offset   OpCode     Operand
-				// ----------------------------------------------------------
-				// 1    0000     ldarg.0
-				// 2    0001     brfalse.s  0008
-				...
+				var maxResults = NormalizeMaxResults(MaxResults, 50);
+				var matches = GetModuleNodes(Assembly)
+					.SelectMany(modNode => modNode.GetModule().GetTypes().Select(type => new {
+						AssemblyName = modNode.GetModule().Assembly?.Name ?? modNode.GetModule().Name,
+						Type = type,
+					}))
+					.Where(x => ContainsIgnoreCase(x.Type.FullName, SearchTerm) || ContainsIgnoreCase(x.Type.Name.String, SearchTerm))
+					.OrderBy(x => x.Type.FullName, StringComparer.OrdinalIgnoreCase)
+					.Take(maxResults + 1)
+					.ToList();
 
-				Set_Function_Opcodes(string assemblyName, string @namespace, string className, string methodName, string[] ilOpcodes, int ilLineNumber, string mode)
-					Takes seven parameters: target identifiers (assembly, namespace, class, method), an array of strings 'ilOpcodes' representing IL instructions, a 0-based 'ilLineNumber' index, and a 'mode' string (""Overwrite"" or ""Append"").
-					Modifies the IL of the target method. ""Overwrite"" replaces instructions starting at 'ilLineNumber'. ""Append"" inserts the new instructions at 'ilLineNumber', shifting existing ones down.
-					The 'ilOpcodes' array should contain strings like ""Ldstr \""Hello\"""", ""Call System.Console::WriteLine(System.String)"", ""Ret"". Basic operand parsing is supported.
-					Returns a confirmation message or an error/exception message.
-				Example Method call: Set_Function_Opcodes(""MyLib"", ""MyNs"", ""MyClass"", ""MyMethod"", new string[] { ""nop"", ""nop"" }, 5, ""Append"")
-				Example Return: ""✅ Appended 2 instructions at IL line 5.""
+				if (matches.Count == 0)
+					return $"No types found matching '{SearchTerm}' in assembly {Assembly}.";
 
-				Overwrite_Full_Func_Opcodes(string assemblyName, string @namespace, string className, string methodName, string[] ilOpcodes)
-					Takes five parameters: target identifiers (assembly, namespace, class, method) and an array of strings 'ilOpcodes' representing the new IL instructions.
-					Completely replaces the entire IL body of the target method with the provided opcodes. All existing instructions are removed first.
-					The 'ilOpcodes' format is the same as for Set_Function_Opcodes. Basic operand parsing is supported.
-					Returns a confirmation message or an error/exception message.
-				Example Method call: Overwrite_Full_Function_Opcodes(""MyLib"", ""MyNs"", ""MyClass"", ""MyMethod"", new string[] { ""ldstr \""Overwritten!\"""", ""call System.Console::WriteLine(System.String)"", ""ret"" })
-				Example Return: ""✅ Overwrote IL of MyClass.MyMethod""
+				var sb = new StringBuilder();
+				foreach (var match in matches.Take(maxResults))
+					sb.AppendLine($"{match.AssemblyName} :: {match.Type.FullName}");
+				if (matches.Count > maxResults)
+					sb.AppendLine($"... truncated to {maxResults} results");
+				return sb.ToString();
+			}
+			catch (Exception ex) {
+				return $"Exception: {ex.Message}";
+			}
+		}
 
-				RefreshAllOpenTabs()
-					Takes no parameters.
-					Refreshes all currently open document tabs (e.g., source code views) in dnSpy to reflect any modifications made to the underlying assemblies.
-					Returns a confirmation message or an exception message.
-				Example Method call: RefreshAllOpenTabs()
-				Example Return: ""Document tabs refreshed""
+		[Command("Search_Methods", MCPCmdDescription = "Searches methods in a loaded assembly by name or signature.")]
+		public static string SearchMethods(string Assembly, string SearchTerm, int MaxResults = 100) {
+			try {
+				if (string.IsNullOrWhiteSpace(SearchTerm))
+					return "SearchTerm cannot be empty.";
 
-				Rename_Namespace(string Assembly, string oldNamespace, string newNamespace)
-					Takes three parameters—the assembly name,the existing namespace and the new namespace—and renames exactly one distinct namespace across all types. Returns a summary of how many types were updated.
-					Example Method call: Rename_Namespace(""MyAssemblyName"", ""Old.Namespace"", ""New.Namespace"");
+				var maxResults = NormalizeMaxResults(MaxResults, 100);
+				var matches = GetModuleNodes(Assembly)
+					.SelectMany(modNode => modNode.GetModule().GetTypes().SelectMany(type => type.Methods.Select(method => new {
+						AssemblyName = modNode.GetModule().Assembly?.Name ?? modNode.GetModule().Name,
+						TypeName = type.FullName,
+						Method = method,
+					})))
+					.Where(x => ContainsIgnoreCase(x.Method.Name.String, SearchTerm) || ContainsIgnoreCase(x.Method.FullName, SearchTerm))
+					.OrderBy(x => x.TypeName, StringComparer.OrdinalIgnoreCase)
+					.ThenBy(x => x.Method.Name.String, StringComparer.OrdinalIgnoreCase)
+					.Take(maxResults + 1)
+					.ToList();
 
-				Rename_Class(string Assembly, string Namespace, string oldClassName, string newClassName)
-					Takes four parameters—the assembly name,the namespace containing the class, the current class name, and the new class name—and renames a specific class within that namespace.
-					Example Method call: Rename_Class(""MyAssemblyName"", ""MyNamespace"", ""OldClassName"", ""NewClassName"");
+				if (matches.Count == 0)
+					return $"No methods found matching '{SearchTerm}' in assembly {Assembly}.";
 
-				Rename_Method(string Assembly, string Namespace, string ClassName, string MethodName, string newName)
-					Takes five parameters—the assembly name,the namespace, the class name, the current Method name (or substring match), and the new name—and renames a specific Method in the given class. Returns a confirmation message.
-					Example Method call: Rename_Method(""MyAssemblyName"", ""MyNamespace"", ""MyClassName"", ""OldMethodName"", ""NewMethodName"");
-			";
+				var sb = new StringBuilder();
+				foreach (var match in matches.Take(maxResults))
+					sb.AppendLine($"{match.AssemblyName} :: {match.TypeName} :: {match.Method.FullName}");
+				if (matches.Count > maxResults)
+					sb.AppendLine($"... truncated to {maxResults} results");
+				return sb.ToString();
+			}
+			catch (Exception ex) {
+				return $"Exception: {ex.Message}";
+			}
+		}
+
+		[Command("Get_Type_Details", MCPCmdDescription = "Returns base type, interfaces, fields, properties, events and methods for a target type.")]
+		public static string GetTypeDetails(string Assembly, string Namespace, string ClassName) {
+			try {
+				foreach (var modNode in GetModuleNodes(Assembly)) {
+					var module = modNode.GetModule();
+					var type = FindType(module, Namespace, ClassName);
+					if (type == null)
+						continue;
+
+					var sb = new StringBuilder();
+					sb.AppendLine($"Assembly: {module.Assembly?.Name ?? module.Name}");
+					sb.AppendLine($"Module: {module.Name}");
+					sb.AppendLine($"Type: {type.FullName}");
+					sb.AppendLine($"BaseType: {type.BaseType?.FullName ?? "<none>"}");
+					sb.AppendLine($"Interfaces: {(type.Interfaces.Count == 0 ? "<none>" : string.Join(", ", type.Interfaces.Select(i => i.Interface.FullName)))}");
+					sb.AppendLine($"NestedTypes: {type.NestedTypes.Count}");
+					sb.AppendLine();
+
+					sb.AppendLine("Fields:");
+					foreach (var field in type.Fields.OrderBy(f => f.Name.String, StringComparer.OrdinalIgnoreCase))
+						sb.AppendLine($"  {field.FieldType.FullName} {field.Name}");
+					if (type.Fields.Count == 0)
+						sb.AppendLine("  <none>");
+
+					sb.AppendLine();
+					sb.AppendLine("Properties:");
+					foreach (var property in type.Properties.OrderBy(p => p.Name.String, StringComparer.OrdinalIgnoreCase))
+						sb.AppendLine($"  {property.PropertySig.GetRetType().FullName} {property.Name}");
+					if (type.Properties.Count == 0)
+						sb.AppendLine("  <none>");
+
+					sb.AppendLine();
+					sb.AppendLine("Events:");
+					foreach (var evt in type.Events.OrderBy(e => e.Name.String, StringComparer.OrdinalIgnoreCase))
+						sb.AppendLine($"  {evt.EventType.FullName} {evt.Name}");
+					if (type.Events.Count == 0)
+						sb.AppendLine("  <none>");
+
+					sb.AppendLine();
+					sb.AppendLine("Methods:");
+					foreach (var method in type.Methods.OrderBy(m => m.Name.String, StringComparer.OrdinalIgnoreCase))
+						sb.AppendLine($"  {method.FullName}");
+
+					return sb.ToString();
+				}
+
+				return $"Type {Namespace}.{ClassName} not found in assembly {Assembly}.";
+			}
+			catch (Exception ex) {
+				return $"Exception: {ex.Message}";
+			}
+		}
+
+		[Command("Get_Assembly_References", MCPCmdDescription = "Lists assembly and module references for a target assembly.")]
+		public static string GetAssemblyReferences(string Assembly) {
+			try {
+				var sb = new StringBuilder();
+				var any = false;
+
+				foreach (var modNode in GetModuleNodes(Assembly)) {
+					var module = modNode.GetModule();
+					any = true;
+					sb.AppendLine($"Module: {module.Name}");
+					sb.AppendLine("AssemblyRefs:");
+					var assemblyRefs = module.GetAssemblyRefs().Select(r => r.FullName).Distinct().OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToList();
+					foreach (var assemblyRef in assemblyRefs)
+						sb.AppendLine($"  {assemblyRef}");
+					if (assemblyRefs.Count == 0)
+						sb.AppendLine("  <none>");
+
+					sb.AppendLine("ModuleRefs:");
+					var moduleRefs = module.GetModuleRefs().Select(r => r.FullName).Distinct().OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToList();
+					foreach (var moduleRef in moduleRefs)
+						sb.AppendLine($"  {moduleRef}");
+					if (moduleRefs.Count == 0)
+						sb.AppendLine("  <none>");
+					sb.AppendLine();
+				}
+
+				return any ? sb.ToString() : $"Assembly {Assembly} is not loaded.";
+			}
+			catch (Exception ex) {
+				return $"Exception: {ex.Message}";
+			}
+		}
+
+		[Command("Search_String_Literals", MCPCmdDescription = "Searches IL string literals in the target assembly.")]
+		public static string SearchStringLiterals(string Assembly, string SearchTerm, int MaxResults = 100) {
+			try {
+				if (string.IsNullOrWhiteSpace(SearchTerm))
+					return "SearchTerm cannot be empty.";
+
+				var maxResults = NormalizeMaxResults(MaxResults, 100);
+				var matches = new List<string>();
+
+				foreach (var modNode in GetModuleNodes(Assembly)) {
+					var module = modNode.GetModule();
+					foreach (var type in module.GetTypes()) {
+						foreach (var method in type.Methods) {
+							if (!method.HasBody)
+								continue;
+
+							foreach (var instruction in method.Body.Instructions) {
+								if (instruction.OpCode != OpCodes.Ldstr || instruction.Operand is not string literal)
+									continue;
+
+								if (!ContainsIgnoreCase(literal, SearchTerm))
+									continue;
+
+								matches.Add($"{module.Assembly?.Name ?? module.Name} :: {type.FullName} :: {method.Name} => \"{SanitizeForSingleLine(literal)}\"");
+								if (matches.Count > maxResults)
+									break;
+							}
+							if (matches.Count > maxResults)
+								break;
+						}
+						if (matches.Count > maxResults)
+							break;
+					}
+					if (matches.Count > maxResults)
+						break;
+				}
+
+				if (matches.Count == 0)
+					return $"No string literals found matching '{SearchTerm}' in assembly {Assembly}.";
+
+				var sb = new StringBuilder();
+				foreach (var match in matches.Take(maxResults))
+					sb.AppendLine(match);
+				if (matches.Count > maxResults)
+					sb.AppendLine($"... truncated to {maxResults} results");
+				return sb.ToString();
+			}
+			catch (Exception ex) {
+				return $"Exception: {ex.Message}";
+			}
 		}
 
 		[Command("Get_Selected_Node", MCPCmdDescription = "Gets the currently selected node within dnSpyEx")]
@@ -205,16 +358,32 @@ namespace Example1.Extension
 
 		[Command("Get_Loaded_Assemblies", MCPCmdDescription = "Gets all Assemblys currently loaded within dnSpyEx")]
 		public static string DumpLoadedAssemblies() {
-			try { 
-				string DataToReturn = "";
-				Debug.WriteLine("-ModuleDocumentNode-");
-				ModuleDef MyModule;
-				foreach (ModuleDocumentNode Modnode in Global.MyTreeView.GetAllModuleNodes().ToList()) {
-					MyModule = Modnode.GetModule();
-					Debug.WriteLine("\t" + MyModule.Name + "->" + MyModule.Assembly.Name + " Location: " + MyModule.Location);
-					DataToReturn += MyModule.Assembly.Name + "\r\n";
+			try {
+				var assemblies = Global.MyTreeView.GetAllModuleNodes()
+					.Select(modNode => modNode.GetModule())
+					.GroupBy(module => module.Assembly?.Name?.String ?? module.Name.String)
+					.OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+					.ToList();
+
+				if (assemblies.Count == 0)
+					return "No assemblies are currently loaded in dnSpyEx.";
+
+				var sb = new StringBuilder();
+				sb.AppendLine("AssemblyCount: " + assemblies.Count);
+				sb.AppendLine();
+
+				foreach (var assemblyGroup in assemblies) {
+					var modules = assemblyGroup.OrderBy(module => module.Name.String, StringComparer.OrdinalIgnoreCase).ToList();
+					var typeCount = modules.Sum(module => module.GetTypes().Count());
+					sb.AppendLine("Assembly: " + assemblyGroup.Key);
+					sb.AppendLine("  ModuleCount: " + modules.Count);
+					sb.AppendLine("  TypeCount: " + typeCount);
+					foreach (var module in modules)
+						sb.AppendLine("  Module: " + module.Name + " :: Location=" + (module.Location ?? "<memory>"));
+					sb.AppendLine();
 				}
-				return DataToReturn;
+
+				return sb.ToString().TrimEnd();
 			}
 			catch (Exception ex) {
 				return $"Exception: " + ex.Message;
@@ -223,31 +392,26 @@ namespace Example1.Extension
 
 		[Command("Namespaces_From_Assembly", MCPCmdDescription = "Dumps all unique namespaces under a given Assembly.")]
 		public static string DumpNamespacesFromAssembly(string AssemblyName) {
-			try { 
-				var sb = new StringBuilder();
-				Debug.WriteLine("- Unique Namespaces -");
+			try {
+				var modules = GetModuleNodes(AssemblyName).Select(node => node.GetModule()).ToList();
+				if (modules.Count == 0)
+					return $"Assembly {AssemblyName} is not loaded.";
 
-				// 1) Gather all TypeDefs from modules whose assembly name matches the filter
-				var myTypes = Global.MyTreeView
-					.GetAllModuleNodes()
-					.Where(mod => mod.GetModule().Assembly.Name.StartsWith(AssemblyName, StringComparison.OrdinalIgnoreCase))
-					.SelectMany(mod => mod.TreeNode.Data.GetModule().GetTypes())
+				var namespaceGroups = modules
+					.SelectMany(module => module.GetTypes())
+					.GroupBy(type => string.IsNullOrWhiteSpace(type.Namespace.String) ? "<global>" : type.Namespace.String)
+					.OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
 					.ToList();
 
-				// 2) Extract distinct namespace strings
-				var uniqueNamespaces = myTypes
-					.Select(t => t.Namespace)
-					.Where(ns => !string.IsNullOrEmpty(ns))
-					.Distinct()
-					.OrderBy(ns => ns);
+				var sb = new StringBuilder();
+				sb.AppendLine("Assembly: " + AssemblyName);
+				sb.AppendLine("NamespaceCount: " + namespaceGroups.Count);
+				sb.AppendLine();
 
-				// 3) Output each namespace
-				foreach (var ns in uniqueNamespaces) {
-					Debug.WriteLine("\t" + ns);
-					sb.AppendLine(ns);
-				}
+				foreach (var group in namespaceGroups)
+					sb.AppendLine("Namespace: " + group.Key + " :: types=" + group.Count());
 
-				return sb.ToString();
+				return sb.ToString().TrimEnd();
 			}
 			catch (Exception ex) {
 				return $"Exception: " + ex.Message;
@@ -285,27 +449,25 @@ namespace Example1.Extension
 
 		[Command("Classes_From_Namespace", MCPCmdDescription = "List all Classes under a given Namespace.")]
 		public static string DumpClassesFromNamespace(string AssemblyName, string Namespace) {
-			try { 
-				string DataToReturn = "";
-				Debug.WriteLine("-ModuleDocumentNodes-");
-				ModuleDef Assemblies;
-				foreach (ModuleDocumentNode Modnode in Global.MyTreeView.GetAllModuleNodes().ToList()) {
-					Assemblies = Modnode.GetModule();
-					Debug.WriteLine(Assemblies.Name);				
-					if (Assemblies.Assembly.Name==(AssemblyName)) { //Assemblies.Name = *.dll
-						DataToReturn += Assemblies.Assembly.Name + "\r\n";
-						var ModTypes = Modnode.TreeNode.Data.GetModule().GetTypes().OrderBy(t => t.Name.ToString(), StringComparer.OrdinalIgnoreCase).ToList();
-						foreach (TypeDef MyType in ModTypes) {
-							if (MyType.Namespace == Namespace) {
-								if (MyType.FullName.StartsWith(Namespace)) {
-									Debug.WriteLine(MyType.FullName); //The Class
-									DataToReturn += "\t" + MyType.FullName + "\r\n";
-								}
-							}
-						}
-					}
-				}
-				return DataToReturn;
+			try {
+				var matches = EnumerateLoadedTypes(AssemblyName)
+					.Where(info => string.Equals(info.Type.Namespace ?? string.Empty, Namespace ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+					.OrderBy(info => info.Type.FullName, StringComparer.OrdinalIgnoreCase)
+					.ToList();
+
+				if (matches.Count == 0)
+					return $"No types found in namespace '{Namespace}' for assembly {AssemblyName}.";
+
+				var sb = new StringBuilder();
+				sb.AppendLine("Assembly: " + AssemblyName);
+				sb.AppendLine("Namespace: " + (string.IsNullOrWhiteSpace(Namespace) ? "<global>" : Namespace));
+				sb.AppendLine("TypeCount: " + matches.Count);
+				sb.AppendLine();
+
+				foreach (var match in matches)
+					sb.AppendLine("Type: " + match.Type.FullName + " :: token=0x" + match.Type.MDToken.Raw.ToString("X8"));
+
+				return sb.ToString().TrimEnd();
 			}
 			catch (Exception ex) {
 				return $"Exception: " + ex.Message;
@@ -391,37 +553,30 @@ namespace Example1.Extension
 
 		[Command("Get_Method_Prototypes", MCPCmdDescription = "List all Method prototypes from a givin Class within a given Namespace.")]
 		public static string DumpMethodPrototypes(string Assembly, string Namespace, string ClassName) {
-			try { 
-				string DataToReturn = "";
-				//Debug.WriteLine("-MethodDef-");
+			try {
+				var typeInfo = EnumerateLoadedTypes(Assembly)
+					.FirstOrDefault(info =>
+						string.Equals(info.Type.Namespace ?? string.Empty, Namespace ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+						string.Equals(info.Type.Name.String, ClassName, StringComparison.OrdinalIgnoreCase));
 
-				ModuleDef MyModuleDef;
-				foreach (ModuleDocumentNode Modnode in Global.MyTreeView.GetAllModuleNodes().ToList()) {
-					MyModuleDef = Modnode.GetModule();
-					if (MyModuleDef.Assembly.Name==(Assembly)) {
-						Debug.WriteLine("\t" + MyModuleDef.Name);
-						DataToReturn += MyModuleDef.Name + "\r\n";
-						var ModTypes = Modnode.TreeNode.Data.GetModule().GetTypes().OrderBy(t => t.FullName, StringComparer.OrdinalIgnoreCase).ToList();
-						foreach (TypeDef MyType in ModTypes) 
-						{
-							Debug.WriteLine("\t" + MyType.FullName);		
-							//if (MyType.FullName.StartsWith(Namespace + "." + ClassName)) { //+MethodName
-							if (MyType.Namespace == Namespace) 
-							{ 
-								if (MyType.Name == ClassName) 
-								{
-									DataToReturn += "\t" + MyType.FullName + "\r\n";
-									List<MethodDef> Methods = MyType.Methods.OrderBy(t => t.Name.ToString(), StringComparer.OrdinalIgnoreCase).ToList();
-									foreach (MethodDef MyMethod in Methods) 
-									{
-										DataToReturn += "\t\t" + MyMethod.FullName + "\r\n";
-									}
-								}
-							}
-						}
-					}
-				}
-				return DataToReturn;
+				if (typeInfo == null)
+					return $"Type {Namespace}.{ClassName} was not found in assembly {Assembly}.";
+
+				var methods = typeInfo.Type.Methods
+					.OrderBy(method => method.Name.String, StringComparer.OrdinalIgnoreCase)
+					.ToList();
+
+				var sb = new StringBuilder();
+				sb.AppendLine("Assembly: " + typeInfo.AssemblyName);
+				sb.AppendLine("Module: " + typeInfo.Module.Name);
+				sb.AppendLine("Type: " + typeInfo.Type.FullName);
+				sb.AppendLine("MethodCount: " + methods.Count);
+				sb.AppendLine();
+
+				foreach (var method in methods)
+					sb.AppendLine("Method: " + method.Name + " :: " + (method.MethodSig != null ? method.MethodSig.ToString() : "<no-signature>") + " :: token=0x" + method.MDToken.Raw.ToString("X8"));
+
+				return sb.ToString().TrimEnd();
 			}
 			catch (Exception ex) {
 				return $"Exception: " + ex.Message;
@@ -807,42 +962,23 @@ namespace Example1.Extension
 		[Command("Rename_Namespace", MCPCmdDescription = "Renames exactly one distinct namespace across all types.")]
 		public static string RenameNamespace(string Assembly, string Old_Namespace_Name, string New_Namespace_Name) {
 			try {
-				// 1) Gather every TypeDef from every module
-				var allTypes = Global.MyTreeView
-					.GetAllModuleNodes()
-					.SelectMany(modNode => modNode.TreeNode.Data.GetModule().GetTypes());
+				if (string.IsNullOrWhiteSpace(Old_Namespace_Name))
+					return "Old_Namespace_Name cannot be empty.";
+				if (New_Namespace_Name == null)
+					return "New_Namespace_Name cannot be null.";
 
-				// 2) Pull out only the distinct namespace strings
-				var distinctNamespaces = allTypes
-					.Select(t => t.Namespace)
-					.Distinct()
+				var allTypes = GetModuleNodes(Assembly)
+					.SelectMany(modNode => modNode.GetModule().GetTypes())
+					.Where(type => string.Equals(type.Namespace ?? string.Empty, Old_Namespace_Name, StringComparison.Ordinal))
 					.ToList();
 
-				// 3) Find matches exactly equal to OldNamespace
-				var matches = distinctNamespaces
-					.Where(ns => ns == Old_Namespace_Name)
-					.ToList();
+				if (allTypes.Count == 0)
+					return $"No namespace found matching '{Old_Namespace_Name}' in assembly {Assembly}.";
 
-				if (matches.Count == 1) {
-					// 4) Rename every TypeDef that was in that namespace
-					int renamedCount = 0;
-					foreach (var mytype in allTypes.Where(t => t.Namespace == Old_Namespace_Name)) { //This works for renaming the class, not correct for namespace.
-						mytype.Namespace = New_Namespace_Name;
-						UTF8String Mystring = New_Namespace_Name;
-						mytype.Name = Mystring;
-						renamedCount++;
-					}
-					var type = matches[0];
-					
-					return $"Namespace '{Old_Namespace_Name}' renamed to '{New_Namespace_Name}' in {renamedCount} types.";
-				}
-				else if (matches.Count == 0) {
-					return $"No namespace found matching '{Old_Namespace_Name}'.";
-				}
-				else {
-					// (shouldn't really happen, since we're matching ==, but just in case)
-					return $"Multiple namespaces found matching '{Old_Namespace_Name}': {string.Join(", ", matches)}. Rename aborted.";
-				}
+				foreach (var type in allTypes)
+					type.Namespace = New_Namespace_Name;
+
+				return $"Namespace '{Old_Namespace_Name}' renamed to '{New_Namespace_Name}' in {allTypes.Count} types.";
 			}
 			catch (Exception ex) {
 				return $"Exception: " + ex.Message;
@@ -853,22 +989,12 @@ namespace Example1.Extension
 		[Command("Rename_Class", MCPCmdDescription = "Renames a specific class within a given Namespace.")]
 		public static string RenameClass(string Assembly, string Namespace, string OldClassName, string NewClassName) { //Not validated yet
 			try {
-				if (!Debugger.IsAttached) {
-					return "Method not available at this time until the developer validates this function";
-				}
-				var matches = new List<TypeDef>();
-				foreach (ModuleDocumentNode ModNode in Global.MyTreeView.GetAllModuleNodes().ToList()) {
-					ModuleDef MyModule = ModNode.GetModule();
-					if (MyModule.Assembly.Name == (Assembly)) {
-						var types = ModNode.TreeNode.Data.GetModule().GetTypes().ToList();
-
-						foreach (TypeDef myType in types) {
-							Debug.WriteLine(myType.FullName + " " + myType.Name);
-						}
-						//matches.AddRange(types.Where(t => t.FullName.StartsWith(Namespace + "." + OldClassName)));
-						matches.AddRange(types.Where(t => t.Name == (OldClassName)));
-					}
-				}
+				var matches = GetModuleNodes(Assembly)
+					.SelectMany(modNode => modNode.GetModule().GetTypes())
+					.Where(type =>
+						string.Equals(type.Namespace ?? string.Empty, Namespace ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+						string.Equals(type.Name.String, OldClassName, StringComparison.Ordinal))
+					.ToList();
 
 				if (matches.Count == 1) {
 					var type = matches[0];
@@ -888,30 +1014,20 @@ namespace Example1.Extension
 			}
 		}
 
-		[Command("Rename_Method", MCPCmdDescription = "Renames a specific Methods by Class within a given Namespace.")]
-		public static string RenameMethod(string Assembly, string Namespace, string ClassName, string MethodName, string Newname) {
+		[Command("Rename_Method", MCPCmdDescription = "Renames a specific method by class within a given namespace. Pass MethodSignature to disambiguate overloads.")]
+		public static string RenameMethod(string Assembly, string Namespace, string ClassName, string MethodName, string Newname, string MethodSignature = null) {
 			try 
 			{ 
-				// collect all candidate Methods
-				var matches = new List<MethodDef>();
-
-				foreach (ModuleDocumentNode ModNode in Global.MyTreeView.GetAllModuleNodes().ToList()) {
-					ModuleDef MyModule = ModNode.GetModule();
-					if (MyModule.Assembly.Name==(Assembly)) {
-						var ModTypes = ModNode.TreeNode.Data.GetModule().GetTypes().ToList();
-						foreach (TypeDef MyType in ModTypes) {
-							if (MyType.Namespace == Namespace) {
-								if (MyType.Name == (ClassName)) {
-									// add any Method whose name contains the target MethodName
-									matches.AddRange(
-										MyType.Methods
-											  .Where(m => m.Name.Contains(MethodName))
-									);
-								}
-							}
-						}
-					}
-				}
+				var matches = GetModuleNodes(Assembly)
+					.SelectMany(modNode => modNode.GetModule().GetTypes())
+					.Where(type =>
+						string.Equals(type.Namespace ?? string.Empty, Namespace ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+						string.Equals(type.Name.String, ClassName, StringComparison.OrdinalIgnoreCase))
+					.SelectMany(type => type.Methods)
+					.Where(method =>
+						string.Equals(method.Name.String, MethodName, StringComparison.Ordinal) &&
+						MatchesMethodSignature(method, MethodSignature))
+					.ToList();
 
 				// decide based on how many matches we got
 				if (matches.Count == 1) {
@@ -923,8 +1039,8 @@ namespace Example1.Extension
 				}
 				else {
 					// list the ambiguous matches
-					var found = string.Join(", ", matches.Select(m => m.Name));
-					return $"Multiple Methods found matching '{MethodName}': {found}. Be more specific, Rename aborted.";
+					var found = string.Join(", ", matches.Select(m => m.FullName));
+					return $"Multiple Methods found matching '{MethodName}': {found}. Pass MethodSignature to disambiguate. Rename aborted.";
 				}
 			}
 			catch (Exception ex) {

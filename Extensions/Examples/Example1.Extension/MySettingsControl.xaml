@@ -1,8 +1,51 @@
 <UserControl x:Class="Example1.Extension.MySettingsControl"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <StackPanel>
-        <CheckBox Content="Option #1" IsChecked="{Binding BoolOption1}" />
-        <CheckBox Content="Option #2" IsChecked="{Binding BoolOption2}" />
-    </StackPanel>
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="12">
+            <TextBlock FontSize="16"
+                       FontWeight="SemiBold"
+                       Text="AgentSmithers MCP Server" />
+            <TextBlock Margin="0,6,0,12"
+                       TextWrapping="Wrap"
+                       Text="Configure how the dnSpy MCP server starts and which address it listens on." />
+
+            <TextBlock Text="Host" />
+            <TextBox Margin="0,4,0,10"
+                     Text="{Binding ServerHost, UpdateSourceTrigger=PropertyChanged}" />
+
+            <TextBlock Text="Port" />
+            <TextBox Margin="0,4,0,10"
+                     Text="{Binding ServerPort, UpdateSourceTrigger=LostFocus}" />
+
+            <CheckBox Margin="0,4,0,0"
+                      Content="Start MCP server automatically when dnSpy finishes loading"
+                      IsChecked="{Binding AutoStartServer}" />
+            <CheckBox Margin="0,6,0,0"
+                      Content="Show confirmation dialog before starting the MCP server"
+                      IsChecked="{Binding ShowStartupPrompt}" />
+            <CheckBox Margin="0,6,0,0"
+                      Content="Enable verbose server logging"
+                      IsChecked="{Binding VerboseLogging}" />
+            <CheckBox Margin="0,6,0,0"
+                      Content="Open MCP Log output tab on startup"
+                      IsChecked="{Binding OpenMcpLogOnStartup}" />
+            <CheckBox Margin="0,6,0,0"
+                      Content="Open Assembly Explorer on startup"
+                      IsChecked="{Binding OpenAssemblyExplorerOnStartup}" />
+
+            <Border Margin="0,12,0,0"
+                    Padding="10"
+                    CornerRadius="4"
+                    Background="#11000000">
+                <TextBlock TextWrapping="Wrap">
+                    <Run Text="Tip: use " />
+                    <Run FontFamily="Consolas" Text="127.0.0.1" />
+                    <Run Text=" for local-only access, or " />
+                    <Run FontFamily="Consolas" Text="+" />
+                    <Run Text=" if you intentionally want HttpListener to bind more broadly and you are running with the required privileges." />
+                </TextBlock>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
 </UserControl>

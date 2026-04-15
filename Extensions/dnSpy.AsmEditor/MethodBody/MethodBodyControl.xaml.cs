@@ -59,6 +59,9 @@ sealed partial class MethodBodyControl : UserControl {
         { return; }
 
         var ownerWindow = Window.GetWindow ( this );
+        if ( ownerWindow is null )
+        { return; }
+
         localsListHelper = new LocalsListHelper ( localsListView, ownerWindow );
         instructionsListHelper = new InstructionsListHelper ( instructionsListView, ownerWindow );
         exceptionHandlersListHelper = new ExceptionHandlersListHelper ( ehListView, ownerWindow );
@@ -95,7 +98,7 @@ sealed partial class MethodBodyControl : UserControl {
                 else
                 {
                     // For other operand types, use their default ToString()
-                    operandString = dnlibInstruction.Operand.ToString();
+                    operandString = dnlibInstruction.Operand.ToString() ?? string.Empty;
                 }
             }
 

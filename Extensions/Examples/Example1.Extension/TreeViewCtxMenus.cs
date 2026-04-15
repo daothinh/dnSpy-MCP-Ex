@@ -38,7 +38,7 @@ namespace Example1.Extension {
 		protected sealed override object CachedContextKey => ContextKey;
 		static readonly object ContextKey = new object();
 
-		protected sealed override TVContext? CreateContext(IMenuItemContext context) {
+		protected sealed override TVContext CreateContext(IMenuItemContext context) {
 			// Make sure it's the file treeview
 			if (context.CreatorObject.Guid != new Guid(MenuConstants.GUIDOBJ_DOCUMENTS_TREEVIEW_GUID))
 				return null;
@@ -63,7 +63,7 @@ namespace Example1.Extension {
 	[ExportMenuItem(Header = "Command #2", Group = Constants.GROUP_TREEVIEW, Order = 10)]
 	sealed class TVCommand2 : TVCtxMenuCommand {
 
-		static IDsDocument? GetDocument(TreeNodeData node) {
+		static IDsDocument GetDocument(TreeNodeData node) {
 			var fileNode = node as DsDocumentNode;
 			if (fileNode is null)
 				return null;
@@ -75,12 +75,9 @@ namespace Example1.Extension {
 			return (peImage as IInternalPEImage)?.IsMemoryMappedIO == true ? fileNode.Document : null;
 		}
 		public override void Execute(TVContext context) {
-			dnSpy.Contracts.Documents.DsDocument activeDocumentService = null;
-			var activeTextView = activeDocumentService;
 			Debug.WriteLine(context.Nodes[0].Text);
-			string? data;
-			bool sc = context.Nodes[0].TryGetData(out data);
-			Debug.WriteLine(data);
+			if (context.Nodes[0].TryGetData(out string data))
+				Debug.WriteLine(data);
 			//context.Nodes[0].Context.DocumentTreeView.
 			//Debug.WriteLine(context.Nodes[0].Context.Decompiler.Decompile(dnSpy.Contracts.Decompiler.DecompilationType.TypeMethods, ));
 			//System.Diagnostics.Debug.WriteLine(context.Nodes);
@@ -111,7 +108,7 @@ namespace Example1.Extension {
 	[ExportMenuItem(Header = "Command #4", Group = Constants.GROUP_TREEVIEW, Order = 30)]
 	sealed class TVCommand4 : TVCtxMenuCommand {
 		//Must highlight class with active code
-		Instruction? GetAllInstructions(TVContext context) {
+		Instruction GetAllInstructions(TVContext context) {
 			if (context.Nodes.Length == 0)
 				return null;
 			
@@ -120,17 +117,9 @@ namespace Example1.Extension {
 				return null;
 
 			var methodDef = methNode.MethodDef;
-			var ReturnType = methNode.MethodDef.ReturnType;
-			var Params = methNode.MethodDef.Parameters;
-
-			var module = methodDef.Module;
-
 			var body = methNode.MethodDef.Body;
-			var ilcode = methNode.MethodDef.Body.Instructions;
-			var vars = methNode.MethodDef.Body.Variables;
 			
 			var decompiler = context.Nodes[0].Context.Decompiler;
-			var settings = decompiler.Settings;
 			
 			// 1) Create your own DecompilationContext (no factory method)
 			var decCtx = new DecompilationContext();
@@ -183,13 +172,13 @@ namespace Example1.Extension {
 			}
 		}
 
-		IMDTokenNode? GetTokenNode(TVContext context) {
+		IMDTokenNode GetTokenNode(TVContext context) {
 			if (context.Nodes.Length == 0)
 				return null;
 			return context.Nodes[0] as IMDTokenNode;
 		}
 
-		public override string? GetHeader(TVContext context) {
+		public override string GetHeader(TVContext context) {
 			var node = GetTokenNode(context);
 			if (node is null)
 				return string.Empty;
@@ -211,7 +200,7 @@ namespace Example1.Extension {
 			}
 		}
 
-		Instruction? GetSecondInstruction(TVContext context) {
+		Instruction GetSecondInstruction(TVContext context) {
 			if (context.Nodes.Length == 0)
 				return null;
 			var methNode = context.Nodes[0] as MethodNode;

@@ -1,19 +1,33 @@
 param(
 	[ValidateSet("all","netframework","net-x86","net-x64")]
 	[string]$buildtfm = 'all',
+	[ValidateSet("Debug","Release")]
+	[string]$Configuration = 'Release',
 	[switch]$NoMsbuild
 	)
 $ErrorActionPreference = 'Stop'
 
 $netframework_tfm = 'net48'
 $net_tfm = 'net8.0-windows'
-$configuration = 'Release'
+$configuration = $Configuration
 $net_baseoutput = "dnSpy\dnSpy\bin\$configuration"
 $apphostpatcher_dir = "Build\AppHostPatcher"
 
 #
 # The reason we don't use dotnet build is that dotnet build doesn't support COM references yet https://github.com/dnSpy/dnSpy/issues/1053
 #
+
+function Invoke-MSBuild {
+	param([string[]]$Arguments)
+
+	if ($env:USE_DOTNET_MSBUILD -eq '1' -and $env:DOTNET_HOST_PATH) {
+		& $env:DOTNET_HOST_PATH msbuild @Arguments
+	}
+	else {
+		& msbuild @Arguments
+	}
+	if ($LASTEXITCODE) { exit $LASTEXITCODE }
+}
 
 function Build-NetFramework {
 	Write-Host 'Building .NET Framework x86 and x64 binaries'
@@ -25,8 +39,7 @@ function Build-NetFramework {
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 	else {
-		msbuild -v:m -m -restore -t:Build -p:Configuration=$configuration
-		if ($LASTEXITCODE) { exit $LASTEXITCODE }
+		Invoke-MSBuild -Arguments @('-v:m', '-m', '-restore', '-t:Build', "-p:Configuration=$configuration")
 	}
 
 	# move all files to a bin sub dir but keep the exe files
@@ -54,8 +67,7 @@ function Build-Net {
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 	else {
-		msbuild -v:m -m -restore -t:Publish -p:Configuration=$configuration -p:TargetFramework=$net_tfm -p:RuntimeIdentifier=$rid -p:SelfContained=True
-		if ($LASTEXITCODE) { exit $LASTEXITCODE }
+		Invoke-MSBuild -Arguments @('-v:m', '-m', '-restore', '-t:Publish', "-p:Configuration=$configuration", "-p:TargetFramework=$net_tfm", "-p:RuntimeIdentifier=$rid", '-p:SelfContained=True')
 	}
 
 	# move all files to a bin sub dir but keep the exe apphosts
@@ -81,8 +93,7 @@ if ($buildNetX86 -or $buildNetX64) {
 		if ($LASTEXITCODE) { exit $LASTEXITCODE }
 	}
 	else {
-		msbuild -v:m -m -restore -t:Build -p:Configuration=$configuration -p:TargetFramework=$netframework_tfm $apphostpatcher_dir\AppHostPatcher.csproj
-		if ($LASTEXITCODE) { exit $LASTEXITCODE }
+		Invoke-MSBuild -Arguments @('-v:m', '-m', '-restore', '-t:Build', "-p:Configuration=$configuration", "-p:TargetFramework=$netframework_tfm", "$apphostpatcher_dir\AppHostPatcher.csproj")
 	}
 }
 

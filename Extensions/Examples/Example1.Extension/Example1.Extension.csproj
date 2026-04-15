@@ -4,29 +4,24 @@
 
   <PropertyGroup>
     <AssemblyName>Example1.Extension.x</AssemblyName>
-    <Nullable>enable</Nullable>
+    <Nullable>disable</Nullable>
     <UseWPF>true</UseWPF>
-    <TargetFrameworks>net48</TargetFrameworks>
+    <TargetFrameworks>net48;net8.0-windows</TargetFrameworks>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\dnSpy\dnSpy.Contracts.DnSpy\dnSpy.Contracts.DnSpy.csproj" />
+    <ProjectReference Include="..\..\..\dnSpy\dnSpy.Contracts.Debugger\dnSpy.Contracts.Debugger.csproj" />
+    <ProjectReference Include="..\..\..\dnSpy\dnSpy.Contracts.Debugger.DotNet\dnSpy.Contracts.Debugger.DotNet.csproj" />
     <ProjectReference Include="..\..\..\dnSpy\dnSpy.Contracts.Logic\dnSpy.Contracts.Logic.csproj" />
+    <ProjectReference Include="..\..\..\dnSpy\Roslyn\dnSpy.Roslyn\dnSpy.Roslyn.csproj" />
+    <ProjectReference Include="..\..\..\Libraries\ICSharpCode.TreeView\ICSharpCode.TreeView.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.13.0" />
     <PackageReference Include="Microsoft.VisualStudio.Text.UI.Wpf" Version="$(MSVSTextVersion)" />
     <PackageReference Include="System.Text.Json" Version="9.0.4" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Reference Include="dnSpy.Roslyn">
-      <HintPath>..\..\..\dnSpy\dnSpy\bin\Debug\net48\dnSpy.Roslyn.dll</HintPath>
-    </Reference>
-    <Reference Include="ICSharpCode.TreeView">
-      <HintPath>..\..\..\Libraries\ICSharpCode.TreeView\bin\Debug\net48\ICSharpCode.TreeView.dll</HintPath>
-    </Reference>
   </ItemGroup>
 
 </Project>

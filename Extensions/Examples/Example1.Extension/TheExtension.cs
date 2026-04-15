@@ -2,25 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.Diagnostics;
-using System.Threading;
-using System.Windows;
-using dnSpy.Contracts.App;
-using dnSpy.Contracts.Decompiler;
-using dnSpy.Contracts.Extension;
-using dnSpy.Contracts.TreeView;
-using dnSpy.Contracts.ToolWindows.App;
-using dnlib.DotNet;
-using dnSpy.Contracts.Text;
 using System.IO;
-using System.Text;
-using System.Runtime.InteropServices;
-using dnSpy.Contracts.Documents.TreeView;
-using static Example1.Extension.SimpleMcpServer;
-using System.Runtime.Remoting.Contexts;
-using dnSpy.Contracts.Documents.Tabs;
 using System.Linq;
-using Microsoft.CodeAnalysis.CSharp;
+using System.Runtime.InteropServices;
+using System.Text;
+using dnSpy.Contracts.Decompiler;
+using dnSpy.Contracts.Documents.TreeView;
+using dnSpy.Contracts.Extension;
+using dnSpy.Contracts.Text;
+using dnlib.DotNet;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 
 // Each extension should export one class implementing IExtension
 
@@ -28,19 +20,6 @@ namespace Example1.Extension {
 	[ExportExtension]
 
 	sealed class TheExtension : IExtension {
-
-		//[Export, Export(typeof(IDocumentTreeView))] 
-		[Import] public IAppWindow dnWindow;
-		[Import] public ITreeViewService? treeViewService; // Use nullable aware reference types if enabled
-		[Import(AllowDefault = true)] public IDsToolWindowService ToolWindowService { get; set; }
-		//[Import(AllowDefault = true)] public ToolWindowContent MyToolWindow;
-		//[Import(AllowDefault = true)] public IDocumentTreeNodeDataContext ToolWindowContentProvider; //null
-		[Import(AllowDefault = true)] public IDocumentTreeView MyTreeView;
-		[Import(AllowDefault = true)] public IDocumentTabService MyTabService;
-
-		[Import] public IDecompilerService decompilerService;
-
-
 		public IEnumerable<string> MergedResourceDictionaries {
 			get {
 				yield break;
@@ -48,8 +27,8 @@ namespace Example1.Extension {
 		}
 
 		public ExtensionInfo ExtensionInfo => new ExtensionInfo {
-			ShortDescription = "Ability to check for updates on github.",
-			Copyright = "Copyright 2019 DeStilleGast (except on Newtonsoft.Json.dll that is included)"
+			ShortDescription = "dnSpy MCP server and reverse-engineering helpers.",
+			Copyright = "AgentSmithers dnSpy MCP extension"
 		};
 
 		public static string DumpSource(ModuleDocumentNode Mod, ModuleDef moduleDef) {
@@ -166,92 +145,14 @@ namespace Example1.Extension {
 
 				return $"✅ Updated method body of {methodDef.Name}";
 			}
-			catch (Exception ex) {
+			catch (Exception) {
 				return "Exception: Failed to update function\r\n\t\n" + source;
 			}
 		}
 
-		public void OnEvent(ExtensionEvent @event, object? obj) {
-			if (@event == ExtensionEvent.AppLoaded) {
-				new Thread(() => {
-					Debug.WriteLine("AppLoaded");
-
-					if (true) 
-					{
-						dnWindow.MainWindow.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Normal, new Action(() => {
-							var askToOpenPage = MsgBox.Instance.Show($"Attach your debugger if you wish, then click okay to start the MCP Server", MsgBoxButton.OK);
-							if (askToOpenPage == MsgBoxButton.Yes) {			
-							}
-
-							MCPCommands MyMCPCommands = new MCPCommands();
-							Global.MySimpleMCPServer = new SimpleMcpServer(MyMCPCommands.GetType());
-							Global.MyTreeView = MyTreeView;
-							Global.MyAppWindow = dnWindow;
-							Global.MyDocumentTabService = MyTabService;
-							Global.MySimpleMCPServer.Start();
-
-							string AssemblyName = "CNETTrafficFighterWeb";
-							string NamespaceName = "CNETTrafficFighterWeb.com.myqnapcloud.desertqnap";
-							string ClassName = "API";
-							string FunctionName = "HelloWorld"; //HelloWorld" //TranslateTextToAudio
-
-							bool testing = false;
-							if (testing) 
-							{
-								//MCPCommands.PatchMethodLogEntry(AssemblyName, NamespaceName, ClassName, FunctionName);
-								var Opcode = MCPCommands.Get_Function_Opcodes(AssemblyName, NamespaceName, ClassName, FunctionName);
-
-								var snippet = @"Console.WriteLine(""Hello from patched method!""); return ""TestedValue"";";
-								//var UpdateSrc = MCPCommands.Update_Methods_Sourcode(AssemblyName, NamespaceName, ClassName, FunctionName, snippet);
-
-
-								var ilLines = new[] {
-									// note: your regex skips the “offset” column, so just supply “OpCode Operand”
-									"Ldstr Hello, world!",
-									"Call System.Console::WriteLine(System.String)",
-									"Ret"
-								};
-
-								//Opcode = MCPCommands.Overwrite_Full_Function_Opcodes(AssemblyName, NamespaceName, ClassName, FunctionName, ilLines);
-								Opcode = MCPCommands.Set_Function_Opcodes(AssemblyName, NamespaceName, ClassName, FunctionName, ilLines, 15, "Appended");
-								//Opcode = MCPCommands.Set_Function_Opcodes(AssemblyName, NamespaceName, ClassName, FunctionName, ilLines, 10, "Overwrite");
-								Opcode = MCPCommands.Get_Function_Opcodes(AssemblyName, NamespaceName, ClassName, FunctionName);
-								MCPCommands.RefreshAllOpenTabs();
-								var Asms = MCPCommands.DumpLoadedAssemblies(); //List all active Assemblys
-								var Namespaces = MCPCommands.DumpNamespacesFromAssembly(AssemblyName); //Dumps all Namespaces in an Assembly
-								var ClassList = MCPCommands.DumpClassesFromNamespace(AssemblyName, NamespaceName);
-								var FunctionPrototypeList = MCPCommands.DumpMethodPrototypes(AssemblyName, NamespaceName, ClassName);
-								var ClassSoureCode = MCPCommands.DumpClassCode(AssemblyName, NamespaceName, ClassName);
-								var FunctionSourceCode = MCPCommands.DumpMethodsSourcode(AssemblyName, NamespaceName, ClassName, FunctionName);
-
-								var Classes = MCPCommands.DumpClasses(AssemblyName, NamespaceName, "", false); //Dumps all Classes in a Namespace
-								var ClassesWithFunctions = MCPCommands.DumpClasses(AssemblyName, NamespaceName, "", true); //Dumps all Classes in a Namespace including their function prototypes
-								var ClassWithFunctions = MCPCommands.DumpClasses(AssemblyName, NamespaceName, ClassName, true); //Dumps specific Class functions, Use the Dump Functions command
-								var ClassSourceCode = MCPCommands.DumpClasses(AssemblyName, NamespaceName, ClassName, false, true); //Dumps full source for specific class
-
-								var functions = MCPCommands.DumpMethods(AssemblyName, NamespaceName, ClassName, "", false); //Dumps specific Class functions
-								var function = MCPCommands.DumpMethods(AssemblyName, NamespaceName, ClassName, FunctionName, true); //Dumps source for specific function
-							}
-
-							//MyMCPCommands.DumpAllNamespaceClassesAndFunctions("CNETTrafficFighterWeb");
-
-							if (ToolWindowService != null) {
-								//ToolWindowService.Show()
-								var asmExplorerGuid = new Guid("5495EE9F-1EF2-45F3-A320-22A89BFDF731");
-								var win = ToolWindowService.Show(asmExplorerGuid);
-								var ui = win.UIObject as DependencyObject;
-								var MySharpeTreeView = win.UIObject as ICSharpCode.TreeView.SharpTreeView;
-								var model = (ui as FrameworkElement)?.DataContext;
-								//Debug.WriteLine(ui.DependencyObjectType.Name); //Returns "SharpTreeView"
-							}
-						}));
-					}
-				}
-				).Start();
-			}
-			else if (@event == ExtensionEvent.Loaded) {
-				//AppDomain.CurrentDomain.AssemblyResolve += CurrentDomain_AssemblyResolve;
-			}
+		public void OnEvent(ExtensionEvent @event, object obj) {
+			if (@event == ExtensionEvent.AppExit)
+				Global.MySimpleMCPServer?.Stop();
 		}
 	}
 }
