@@ -7,3 +7,19 @@ _ReSharper*/
 *_wpftmp.csproj
 launchSettings.json
 .idea/
+.dotnet/
+.tools/
+artifacts/
+mcp-build/
+
+# Local build/debug artifacts
+/build-*.log
+/buildreview.log
+/ext-*.log
+/full-build.log
+/tmp-dnspy-settings*.xml
+
+# Build-generated helper outputs under source Build/
+/Build/compiled/
+/Build/**/bin/
+/Build/**/obj/
